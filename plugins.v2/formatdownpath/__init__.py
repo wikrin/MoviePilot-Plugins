@@ -332,7 +332,7 @@ class FormatDownPath(_PluginBase):
         downloader_name = event_data.get("downloader")
         torrent_hashes = event_data.get("hash")
         context: Context = event_data.get("context")
-        self.downloader = self.get_downloader(downloader_name)
+        self.get_downloader(downloader_name)
         if not self.downloader:
             logger.error(f"连接下载器 {downloader_name} 失败")
             return
