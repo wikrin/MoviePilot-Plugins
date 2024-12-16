@@ -188,7 +188,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -229,6 +229,7 @@ class FormatDownPath(_PluginBase):
                 "rename_torrent",
                 "rename_file",
                 "format_save_path",
+                "format_torrent_name",
                 "format_movie_path",
                 "format_tv_path",
             ):
@@ -662,16 +663,16 @@ if __name__ == "__main__":
     fdp._enabled = True
     fdp._rename_file = True
     fdp._rename_torrent = True
-    fdp._format_torrent_name = "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}"
+    fdp._format_torrent_name = "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ __meta__.begin_season }}{% endif %} {% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %} {% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %} {% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %} {% endif %}"
     fdp._format_save_path = "{{title}}{% if year %} ({{year}}){% endif %}"
     fdp._format_movie_path = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
     fdp.get_downloader("local")
     # fdp.get_downloader("tr")
     torrent_info = fdp.downloader.torrents_info(
-        torrent_hashes="28d087144d2a4b047702f4aca4d5a9e691877342"
+        torrent_hashes="d567d5eed678a3d53d96988fb9c53b0fc4629b0b"
     )
     meta = MetaInfo(
-        "Orb.On.the.Movements.of.the.Earth.S01.2024.1080p.WEB-DL.H264.AAC-ADWeb"
+        "Spy.x.Family.Code.White.2023.V2.1080p.JPN.BluRay.x265.10bit.DTS.2Audio-ADE"
     )
     media_info = fdp.chain.recognize_media(meta=meta)
     fdp.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info)
