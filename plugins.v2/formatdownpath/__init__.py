@@ -3,24 +3,28 @@ from abc import ABCMeta, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
 from qbittorrentapi import TorrentDictionary
+from sqlalchemy.orm import Session
 from transmission_rpc import Torrent
+
 
 # 项目库
 from app.core.context import MediaInfo, TorrentInfo, Context
 from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
+from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
+from app.db import DbOper, db_update
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
 from app.modules.filemanager import FileManagerModule
 from app.modules.qbittorrent import Qbittorrent
 from app.modules.transmission import Transmission
 from app.plugins import _PluginBase
-from app.schemas.types import EventType
+from app.schemas.types import EventType, MediaType
 from app.schemas.types import SystemConfigKey
 
 
@@ -74,6 +78,13 @@ class Downloader(metaclass=ABCMeta):
         pass
 
     @abstractmethod
+    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
+        """
+        重命名种子
+        """
+        pass
+
+    @abstractmethod
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         """
         重命名种子文件
@@ -97,6 +108,9 @@ class QbittorrentDownloader(Downloader):
 
     def set_torrent_save_path(self, torrent_hashes: str, location: str) -> None:
         self.qbc.torrents_set_location(torrent_hashes=torrent_hashes, location=location)
+    
+    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
+        self.qbc.torrents_rename(torrent_hashes, new_torrent_name)
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
@@ -139,6 +153,9 @@ class TransmissionDownloader(Downloader):
 
     def set_torrent_save_path(self, torrent_hashes: str, location: str) -> None:
         self.trc.move_torrent_data(ids=torrent_hashes, location=location)
+
+    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
+        pass
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_path)
@@ -188,13 +205,16 @@ class FormatDownPath(_PluginBase):
 
     # 配置属性
     _enabled: bool = False
+    _rename_torrent: bool = False
     _rename_file: bool = False
     _format_save_path: str = "{{title}}{% if year %} ({{year}}){% endif %}"
-    _format_file_path: str = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
+    _format_movie_path: str = "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
+    _format_tv_path: str = "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}"
 
     def init_plugin(self, config: dict = None):
 
         self.downloader_helper = DownloaderHelper()
+        self.downloadhis = DownloadHistoryOper()
         # 停止现有任务
         self.stop_service()
         self.load_config(config)
@@ -205,9 +225,11 @@ class FormatDownPath(_PluginBase):
             # 遍历配置中的键并设置相应的属性
             for key in (
                 "enabled",
+                "rename_torrent",
                 "rename_file",
                 "format_save_path",
-                "format_file_path",
+                "format_movie_path",
+                "format_tv_path",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
@@ -216,8 +238,11 @@ class FormatDownPath(_PluginBase):
         self.update_config(
             {
                 "enabled": self._enabled,
-                "format_path": self._format_save_path,
-                "format_file_path": self._format_file_path,
+                "rename_torrent": self._rename_torrent,
+                "rename_file": self._rename_file,
+                "format_save_path": self._format_save_path,
+                "format_movie_path": self._format_movie_path,
+                "format_tv_path": self._format_tv_path,
             }
         )
 
@@ -242,6 +267,19 @@ class FormatDownPath(_PluginBase):
                                     }
                                 ],
                             },
+                            # {
+                            #     'component': 'VCol',
+                            #     'props': {'cols': 12, 'md': 3},
+                            #     'content': [
+                            #         {
+                            #             'component': 'VSwitch',
+                            #             'props': {
+                            #                 'model': 'rename_torrent',
+                            #                 'label': '种子重命名',
+                            #             },
+                            #         }
+                            #     ],
+                            # },
                             {
                                 'component': 'VCol',
                                 'props': {'cols': 12, 'md': 3},
@@ -250,7 +288,7 @@ class FormatDownPath(_PluginBase):
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'rename_file',
-                                            'label': '种子文件重命名',
+                                            'label': '种子文件重命名(实验功能)',
                                         },
                                     }
                                 ],
@@ -262,7 +300,7 @@ class FormatDownPath(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {'cols': 12},
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -274,15 +312,20 @@ class FormatDownPath(_PluginBase):
                                     }
                                 ],
                             },
+                        ],
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
+                                'props': {'cols': 12},
                                 'content': [
                                     {
                                         'component': 'VTextField',
                                         'props': {
-                                            'model': 'format_file_path',
-                                            'label': '自定义文件重命名格式',
+                                            'model': 'format_movie_path',
+                                            'label': '自定义电影文件重命名格式',
                                             'placeholder': '使用Jinja2语法',
                                         },
                                     }
@@ -290,13 +333,55 @@ class FormatDownPath(_PluginBase):
                             },
                         ],
                     },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'format_tv_path',
+                                            'label': '自定义电视剧文件重命名格式',
+                                            'placeholder': '使用Jinja2语法',
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '谨慎开启 种子文件重命名, 可能会导致意料之外的情况, 增加种子维护难度'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    }
                 ],
             },
         ], {
             "enabled": False,
+            "rename_torrent": False,
             "rename_file": False,
             "format_save_path": self._format_save_path,
-            "format_file_path": self._format_file_path,
+            "format_movie_path": self._format_movie_path,
+            "format_tv_path": self._format_tv_path,
         }
 
     def stop_service(self):
@@ -384,6 +469,7 @@ class FormatDownPath(_PluginBase):
         _torrent_hash = torrent_info.hash
         _torrent_name = torrent_info.name
         _auto_tmm = torrent_info.auto_tmm
+        _format_file_path = self._format_movie_path if media_info.type == MediaType.MOVIE else self._format_tv_path
         success = True
         # 关闭 Torrent自动管理
         if success and _auto_tmm:
@@ -415,17 +501,21 @@ class FormatDownPath(_PluginBase):
             if common_length:
                 new_file_path = Path(*_new_parts[common_length:])
             new_path = save_path / new_file_path
+            # 查询数据库
+            downloadhis, downfiles = self.fetch_data(torrent_hash=_torrent_hash)
             if new_path != save_path:
                 try:
                     new_path = str(new_path)
                     logger.info(f"开始更改种子 {_torrent_name} 保存路径：{save_path} ==> {new_path}")
                     self.downloader.set_torrent_save_path(torrent_hashes=_torrent_hash, location=new_path)
+                    # 更新路径信息
+                    downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
                     logger.info(f"更改种子保存路径成功：{_torrent_name}，新路径：{new_path}")
                 except Exception as e:
                     logger.error(f"更改种子保存路径失败：{str(e)}")
                     success = False
         # 重命名种子文件
-        if success and self._rename_file and self._format_file_path:
+        if success and self._rename_file and _format_file_path:
             logger.info(f"{_torrent_name} 开始重命名种子文件")
             torrent_files: list[TorrentFile] = torrent_info.files
             for file in torrent_files:
@@ -444,17 +534,91 @@ class FormatDownPath(_PluginBase):
                     file_suffix = file_path.suffix
                     meta = MetaInfoPath(file_path)
                     _file_new_path = self.format_path(
-                        template_string=self._format_file_path,
+                        template_string=_format_file_path,
                         meta=meta,
                         mediainfo=media_info,
                         file_ext=file_suffix)
-
-                    self.downloader.rename_file(torrent_hash=_torrent_hash, old_path=_file_name, new_path=str(_file_new_path))
-                    logger.info(f"种子文件重命名成功：{_file_name} ==> {_file_new_path}")
+                    print(_file_new_path)
+                    print(file_path)
+                    new_file_path = str(_file_new_path)
+                    old_path = str(file_path)
+                    # 跳过已重命名的文件
+                    if new_file_path in old_path:
+                        continue
+                    self.downloader.rename_file(torrent_hash=_torrent_hash, old_path=_file_name, new_path=new_file_path)
+                    # 更新路径信息
+                    downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=_file_name, new_path=new_file_path)
+                    logger.info(f"种子文件重命名成功：{_file_name} ==> {new_file_path}")
                 except Exception as e:
                     logger.error(f"种子文件 {_file_name} 重命名失败：{str(e)}")
                     success = False
+        # 更新数据库
+        self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
+    
+    def update_path(self, downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
+
+        def safe_replace(d: dict, old: str, new: str):
+            """
+            替换路径
+            """
+            for k, v in d.items():
+                if isinstance(v, str):
+                    p = d[k]
+                    d[k] = v.replace(old, new)
+                    logger.debug(f"替换: {p} ==> {d[k]}")
+
+        # 更新下载历史记录
+        if downloadhis:
+            for d in downloadhis.values():
+                safe_replace(d, old_path, new_path)
+
+        # 更新下载文件记录
+        if downfiles:
+            for d in downfiles.values():
+                safe_replace(d, old_path, new_path)
+        return downloadhis, downfiles
+    
+    @staticmethod
+    @db_update
+    def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
+        payload = {k: v for k, v in payload.items() if v is not None}
+        db.query(DownloadFiles).filter(
+            DownloadFiles.download_hash == torrent_hash \
+                and DownloadFiles.id == db_id).update(payload)
+    
+    @staticmethod
+    @db_update
+    def update_download_history_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
+        payload = {k: v for k, v in payload.items() if v is not None}
+        db.query(DownloadHistory).filter(
+            DownloadHistory.download_hash == torrent_hash \
+                and DownloadHistory.id == db_id).update(payload)
+        
+    def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
+        """
+        使用哈希查询数据库中的下载记录和文件记录
+        """
+        # 查询下载历史记录
+        download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
+        his = {download_history.id: {"path": download_history.path}} if download_history else {}
+        # 查询文件下载记录
+        download_files: List[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
+        downfiles = {file.id: {"fullpath": file.fullpath, "savepath": file.savepath, "filepath": file.filepath} for file in download_files} if download_files else {}
+        return his, downfiles
+
+    def update_db(self, torrent_hash: str, downloadhis: Optional[Dict[int, dict]], downfiles: Optional[Dict[int, dict]]):
+        """
+        更新数据库
+        """
+        db = DbOper()._db
+        if downloadhis:
+            for id, data in downloadhis.items():
+                self.update_download_history_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
+
+        if downfiles:
+            for id, data in downfiles.items():
+                self.update_download_file_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
 
 if __name__ == "__main__":
     # 测试用例
@@ -463,9 +627,9 @@ if __name__ == "__main__":
     fdp._enabled = True
     fdp._rename_file = True
     fdp._format_save_path = "{{title}}{% if year %} ({{year}}){% endif %}"
-    fdp._format_file_path = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
-    # fdp.get_downloader("local")
-    fdp.get_downloader("tr")
+    fdp._format_movie_path = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
+    fdp.get_downloader("local")
+    # fdp.get_downloader("tr")
     torrent_info = fdp.downloader.torrents_info(
         torrent_hashes="28d087144d2a4b047702f4aca4d5a9e691877342"
     )
