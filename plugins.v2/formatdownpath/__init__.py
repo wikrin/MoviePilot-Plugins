@@ -110,7 +110,7 @@ class QbittorrentDownloader(Downloader):
         self.qbc.torrents_set_location(torrent_hashes=torrent_hashes, location=location)
     
     def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
-        self.qbc.torrents_rename(torrent_hashes, new_torrent_name)
+        self.qbc.torrents_rename(torrent_hash=torrent_hashes, new_torrent_name=new_torrent_name)
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
@@ -208,6 +208,7 @@ class FormatDownPath(_PluginBase):
     _rename_torrent: bool = False
     _rename_file: bool = False
     _format_save_path: str = "{{title}}{% if year %} ({{year}}){% endif %}"
+    _format_torrent_name: str = "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}"
     _format_movie_path: str = "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
     _format_tv_path: str = "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}"
 
@@ -241,6 +242,7 @@ class FormatDownPath(_PluginBase):
                 "rename_torrent": self._rename_torrent,
                 "rename_file": self._rename_file,
                 "format_save_path": self._format_save_path,
+                "format_torrent_name": self._format_torrent_name,
                 "format_movie_path": self._format_movie_path,
                 "format_tv_path": self._format_tv_path,
             }
@@ -267,19 +269,19 @@ class FormatDownPath(_PluginBase):
                                     }
                                 ],
                             },
-                            # {
-                            #     'component': 'VCol',
-                            #     'props': {'cols': 12, 'md': 3},
-                            #     'content': [
-                            #         {
-                            #             'component': 'VSwitch',
-                            #             'props': {
-                            #                 'model': 'rename_torrent',
-                            #                 'label': '种子重命名',
-                            #             },
-                            #         }
-                            #     ],
-                            # },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'rename_torrent',
+                                            'label': '种子重命名',
+                                        },
+                                    }
+                                ],
+                            },
                             {
                                 'component': 'VCol',
                                 'props': {'cols': 12, 'md': 3},
@@ -307,6 +309,25 @@ class FormatDownPath(_PluginBase):
                                         'props': {
                                             'model': 'format_save_path',
                                             'label': '自定义保存路径格式',
+                                            'placeholder': '使用Jinja2语法',
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'format_torrent_name',
+                                            'label': '自定义种子标题重命名格式',
                                             'placeholder': '使用Jinja2语法',
                                         },
                                     }
@@ -379,6 +400,7 @@ class FormatDownPath(_PluginBase):
             "enabled": False,
             "rename_torrent": False,
             "rename_file": False,
+            "format_torrent_name": self._format_torrent_name,
             "format_save_path": self._format_save_path,
             "format_movie_path": self._format_movie_path,
             "format_tv_path": self._format_tv_path,
@@ -463,6 +485,7 @@ class FormatDownPath(_PluginBase):
                 meta=meta, mediainfo=mediainfo, file_ext=file_ext)
 
         rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
+        logger.debug(rename_dict)
         return FileManagerModule.get_rename_path(template_string, rename_dict)
 
     def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> bool:
@@ -514,6 +537,20 @@ class FormatDownPath(_PluginBase):
                 except Exception as e:
                     logger.error(f"更改种子保存路径失败：{str(e)}")
                     success = False
+        # 重命名种子名称
+        if success and self._rename_torrent:
+            logger.info(f"{_torrent_name} 开始重命名种子名称")
+            new_name = self.format_path(
+                    template_string=self._format_torrent_name,
+                    meta=meta,
+                    mediainfo=media_info)
+            try:
+                if str(new_name) != _torrent_name:
+                    self.downloader.torrents_rename(torrent_hashes=_torrent_hash, new_torrent_name=str(new_name))
+                    logger.info(f"重命名成功：{_torrent_name} ==> {new_name}")
+            except Exception as e:
+                logger.error(f"重命名失败：{str(e)}")
+                success = False
         # 重命名种子文件
         if success and self._rename_file and _format_file_path:
             logger.info(f"{_torrent_name} 开始重命名种子文件")
@@ -538,8 +575,6 @@ class FormatDownPath(_PluginBase):
                         meta=meta,
                         mediainfo=media_info,
                         file_ext=file_suffix)
-                    print(_file_new_path)
-                    print(file_path)
                     new_file_path = str(_file_new_path)
                     old_path = str(file_path)
                     # 跳过已重命名的文件
@@ -626,6 +661,8 @@ if __name__ == "__main__":
     fdp.init_plugin()
     fdp._enabled = True
     fdp._rename_file = True
+    fdp._rename_torrent = True
+    fdp._format_torrent_name = "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}"
     fdp._format_save_path = "{{title}}{% if year %} ({{year}}){% endif %}"
     fdp._format_movie_path = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
     fdp.get_downloader("local")
