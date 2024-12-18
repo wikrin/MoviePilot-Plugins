@@ -190,7 +190,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -600,6 +600,9 @@ class FormatDownPath(_PluginBase):
         """
         success = False
         self.get_downloader(downloader)
+        if self.downloader is None:
+            # 未启用或不存在, 跳过这个种子
+            return True
         if self.downloader:
             success = True
             logger.info(f"已连接下载器: {downloader}")
