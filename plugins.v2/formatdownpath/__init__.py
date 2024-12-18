@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
+from apscheduler.triggers.cron import CronTrigger
 from qbittorrentapi import TorrentDictionary
 from sqlalchemy.orm import Session
 from transmission_rpc import Torrent
@@ -17,7 +18,8 @@ from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
-from app.db import DbOper, db_update
+from app.db import db_query, db_update
+from app.db.models.plugindata import PluginData
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
 from app.modules.filemanager import FileManagerModule
@@ -67,18 +69,18 @@ class TorrentInfo():
 
 class Downloader(metaclass=ABCMeta):
     @abstractmethod
-    def set_auto_tmm(self, torrent_hashes: str, enable: bool) -> None:
+    def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
         pass
 
     @abstractmethod
-    def set_torrent_save_path(self, torrent_hashes: str, location: str) -> None:
+    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
         """
         设置种子保存路径
         """
         pass
 
     @abstractmethod
-    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
+    def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
         """
         重命名种子
         """
@@ -92,7 +94,7 @@ class Downloader(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def torrents_info(self, torrent_hashes: str) -> Optional[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
         """
         获取种子信息
         """
@@ -103,23 +105,23 @@ class QbittorrentDownloader(Downloader):
     def __init__(self, qbc: Qbittorrent):
         self.qbc = qbc.qbc
 
-    def set_auto_tmm(self, torrent_hashes: str, enable: bool) -> None:
-        self.qbc.torrents_set_auto_management(torrent_hashes=torrent_hashes, enable=enable)
+    def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
+        self.qbc.torrents_set_auto_management(torrent_hashes=torrent_hash, enable=enable)
 
-    def set_torrent_save_path(self, torrent_hashes: str, location: str) -> None:
-        self.qbc.torrents_set_location(torrent_hashes=torrent_hashes, location=location)
+    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
+        self.qbc.torrents_set_location(torrent_hashes=torrent_hash, location=location)
     
-    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
-        self.qbc.torrents_rename(torrent_hash=torrent_hashes, new_torrent_name=new_torrent_name)
+    def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
+        self.qbc.torrents_rename(torrent_hash=torrent_hash, new_torrent_name=new_torrent_name)
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
 
-    def torrents_info(self, torrent_hashes: str) -> Optional[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
         """
         根据哈希获取种子信息
         """
-        torrent_info = self.qbc.torrents_info(torrent_hashes=torrent_hashes)
+        torrent_info = self.qbc.torrents_info(torrent_hash=torrent_hash)
         if torrent_info:
             torrent_info: TorrentDictionary = torrent_info[0]
             torrent_info = TorrentInfo(
@@ -145,23 +147,23 @@ class TransmissionDownloader(Downloader):
     def __init__(self, trc: Transmission):
         self.trc = trc.trc
 
-    def set_auto_tmm(self, torrent_hashes: str, enable: bool) -> None:
+    def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
         """
         transmission_rpc 没有`Torrent自动管理`功能
         """
         pass
 
-    def set_torrent_save_path(self, torrent_hashes: str, location: str) -> None:
-        self.trc.move_torrent_data(ids=torrent_hashes, location=location)
+    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
+        self.trc.move_torrent_data(ids=torrent_hash, location=location)
 
-    def torrents_rename(self, torrent_hashes: str, new_torrent_name: str) -> None:
-        pass
+    def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
+        self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_torrent_name)
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_path)
 
-    def torrents_info(self, torrent_hashes: str) -> Optional[TorrentInfo]:
-        torrent_info: Torrent = self.trc.get_torrent(torrent_id=torrent_hashes)
+    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
+        torrent_info: Torrent = self.trc.get_torrent(torrent_id=torrent_hash)
         if torrent_info:
             torrent_info = TorrentInfo(
                 name = torrent_info.name,
@@ -188,7 +190,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -204,13 +206,16 @@ class FormatDownPath(_PluginBase):
     _scheduler = None
 
     # 配置属性
-    _enabled: bool = False
+    _cron: str = ""
+    _cron_enabled: bool = False
+    _event_enabled: bool = False
     _rename_torrent: bool = False
     _rename_file: bool = False
-    _format_save_path: str = "{{title}}{% if year %} ({{year}}){% endif %}"
-    _format_torrent_name: str = "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}"
-    _format_movie_path: str = "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
-    _format_tv_path: str = "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}"
+    _format_save_path: str = ""
+    _format_torrent_name: str = ""
+    _format_movie_path: str = ""
+    _format_tv_path: str = ""
+    _last_id: int = 0
 
     def init_plugin(self, config: dict = None):
 
@@ -225,29 +230,18 @@ class FormatDownPath(_PluginBase):
         if config:
             # 遍历配置中的键并设置相应的属性
             for key in (
-                "enabled",
+                "cron",
+                "cron_enabled",
+                "event_enabled",
                 "rename_torrent",
                 "rename_file",
                 "format_save_path",
                 "format_torrent_name",
                 "format_movie_path",
                 "format_tv_path",
+                "last_id",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
-
-    def __update_config(self):
-        """更新设置"""
-        self.update_config(
-            {
-                "enabled": self._enabled,
-                "rename_torrent": self._rename_torrent,
-                "rename_file": self._rename_file,
-                "format_save_path": self._format_save_path,
-                "format_torrent_name": self._format_torrent_name,
-                "format_movie_path": self._format_movie_path,
-                "format_tv_path": self._format_tv_path,
-            }
-        )
 
     def get_form(self):
         return [
@@ -259,20 +253,52 @@ class FormatDownPath(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {'cols': 8, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
                                         'props': {
-                                            'model': 'enabled',
-                                            'label': '启用插件',
+                                            'model': 'event_enabled',
+                                            'label': '启用事件监听',
                                         },
                                     }
                                 ],
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {'cols': 8, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'cron_enabled',
+                                            'label': '启用定时任务',
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 8, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cron',
+                                            'label': '执行周期',
+                                            'placeholder': '0 8 * * *',
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 8, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -285,7 +311,20 @@ class FormatDownPath(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
+                                'props': {'cols': 8, 'md': 4},
+                                'content': [
+                                    # {
+                                    #     'component': 'VSwitch',
+                                    #     'props': {
+                                    #         'model': '',
+                                    #         'label': '占位',
+                                    #     },
+                                    # }
+                                ],
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 8, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -311,6 +350,7 @@ class FormatDownPath(_PluginBase):
                                             'model': 'format_save_path',
                                             'label': '自定义保存路径格式',
                                             'placeholder': '使用Jinja2语法',
+                                            'clearable': True,
                                         },
                                     }
                                 ],
@@ -325,11 +365,12 @@ class FormatDownPath(_PluginBase):
                                 'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VTextarea',
                                         'props': {
                                             'model': 'format_torrent_name',
                                             'label': '自定义种子标题重命名格式',
                                             'placeholder': '使用Jinja2语法',
+                                            'clearable': True,
                                         },
                                     }
                                 ],
@@ -344,11 +385,12 @@ class FormatDownPath(_PluginBase):
                                 'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VTextarea',
                                         'props': {
                                             'model': 'format_movie_path',
                                             'label': '自定义电影文件重命名格式',
                                             'placeholder': '使用Jinja2语法',
+                                            'clearable': True,
                                         },
                                     }
                                 ],
@@ -363,11 +405,12 @@ class FormatDownPath(_PluginBase):
                                 'props': {'cols': 12},
                                 'content': [
                                     {
-                                        'component': 'VTextField',
+                                        'component': 'VTextarea',
                                         'props': {
                                             'model': 'format_tv_path',
                                             'label': '自定义电视剧文件重命名格式',
                                             'placeholder': '使用Jinja2语法',
+                                            'clearable': True,
                                         },
                                     }
                                 ],
@@ -386,26 +429,86 @@ class FormatDownPath(_PluginBase):
                                     {
                                         'component': 'VAlert',
                                         'props': {
-                                            'type': 'info',
+                                            'type': 'warning',
                                             'variant': 'tonal',
-                                            'text': '谨慎开启 种子文件重命名, 可能会导致意料之外的情况, 增加种子维护难度'
+                                            'text': '谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度'
                                         }
                                     }
                                 ]
                             }
                         ]
-                    }
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'warning',
+                                            'variant': 'tonal',
+                                            'text': '种子重命名 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子文件结构; Transmission 会修改种子文件结构, 有辅种需求不要开启'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VRow',
+                        'content': [
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                },
+                                'content': [
+                                    {
+                                        'component': 'VAlert',
+                                        'props': {
+                                            'type': 'info',
+                                            'variant': 'tonal',
+                                            'text': '事件监听 为MP添加下载任务触发, 仅处理添加下载的种子, 定时任务 为获取转种/辅种 插件数据并处理'
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
                 ],
             },
         ], {
-            "enabled": False,
+            "corn": "0 8 * * *",
+            "cron_enabled": False,
+            "event_enabled": False,
             "rename_torrent": False,
             "rename_file": False,
-            "format_torrent_name": self._format_torrent_name,
-            "format_save_path": self._format_save_path,
-            "format_movie_path": self._format_movie_path,
-            "format_tv_path": self._format_tv_path,
+            "format_torrent_name": self._format_torrent_name or "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}",
+            "format_save_path": self._format_save_path or "{{title}}{% if year %} ({{year}}){% endif %}",
+            "format_movie_path": self._format_movie_path or "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
+            "format_tv_path": self._format_tv_path or "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
         }
+
+    def get_service(self) -> List[Dict[str, Any]]:
+        """
+        注册插件公共服务
+        """
+        if self._cron_enabled:
+            return [
+                {
+                    "id": "FormatDownPath",
+                    "name": "转种/辅种自定义格式化",
+                    "trigger": CronTrigger.from_crontab(self._cron or "0 8 * * *"),
+                    "func": self.cron_process_main,
+                    "kwargs": {},
+                }
+            ]
+        return []
 
     def stop_service(self):
         """退出插件"""
@@ -427,29 +530,100 @@ class FormatDownPath(_PluginBase):
         pass
 
     def get_state(self):
-        return self._enabled
+        return self._event_enabled or self._cron_enabled
 
     @eventmanager.register(EventType.DownloadAdded)
-    def main(self, event: Event):
+    def event_process_main(self, event: Event):
         """
         处理事件
         """
-        if not self._enabled or not event:
+        if not self._event_enabled \
+            and not event:
             return
         event_data = event.event_data or {}
-        downloader_name = event_data.get("downloader")
-        torrent_hashes = event_data.get("hash")
-        context: Context = event_data.get("context")
-        self.get_downloader(downloader_name)
-        if not self.downloader:
-            logger.error(f"连接下载器 {downloader_name} 失败")
-            return
-        torrent_info = self.downloader.torrents_info(torrent_hashes)
-        if not torrent_info:
-            logger.error(f"种子信息获取失败，种子哈希：{torrent_hashes}")
-            return
-        if self.format_torrent_all(torrent_info=torrent_info, meta=context.meta_info, media_info=context.media_info):
-            logger.info(f"种子 {torrent_info.name} 格式化成功")
+        hash = event_data.get("hash")
+        downloader = event_data.get("downloader")
+        # 获取待处理数据
+        if self._event_enabled:
+            context: Context = event_data.get("context")
+            if self.main(downloader, hash, meta=context.meta_info, media_info=context.media_info):
+                return
+        # 保存未完成数据
+        pending = self.get_data(key="pending").value or {}
+        pending[hash] = downloader
+        self.update_data(pending)
+
+    def cron_process_main(self):
+        """
+        定时任务处理流程
+        """
+        _failures = {}
+        # 使用插件数据
+        plugin_ids = ["TorrentTransfer", "IYUUAutoSeed"]
+        # 获取待处理数据
+        pending = self.get_data(key="pending").value or {}
+        # 获取插件数据
+        plugin_data = self.get_plugin_data(db=self.plugindata._db, plugin_ids=plugin_ids, last_id=self._last_id)
+        if plugin_data:
+            self._last_id = plugin_data[-1].id
+            pending.update(self.process_plugin_data(plugin_data))
+        if pending:
+            for hash, downloader in pending.items():
+                if not self.main(downloader, hash):
+                    _failures[hash] = downloader
+        if _failures:
+            self.update_data(_failures)
+
+    def process_plugin_data(self, plugins_data: List[PluginData]) -> Dict[str, str]:
+        """
+        处理从数据库获取的插件数据
+        """
+        data = {}
+        for pd in plugins_data:
+            if pd.plugin_id == "TorrentTransfer":
+                data[pd.value.get("to_download_id")] = pd.value.get("to_download")
+            else:
+                downloader = pd.value[0].get("downloader")
+                for hash in pd.value[0].get("torrents"):
+                    data[hash] = downloader
+        return data
+
+    def main(self, downloader: str, hash: str, meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
+        """
+        处理单个种子
+        :param downloader: 下载器名称
+        :param hash: 种子哈希
+        :param meta: 文件元数据
+        :param media_info: 媒体信息
+        :return: 处理结果
+        """
+        success = False
+        self.get_downloader(downloader)
+        if self.downloader:
+            success = True
+            logger.info(f"已连接下载器: {downloader}")
+        if success:
+            torrent_info = self.downloader.torrents_info(hash)
+            # 缺少细节处理, 例如种子被手动删除或转移
+            if not torrent_info:
+                logger.error(f"种子信息获取失败，种子哈希：{hash}")
+                success = False
+        if success and not meta:
+            meta = MetaInfo(torrent_info.name)
+            if not meta:
+                logger.error(f"元数据获取失败，种子名称：{torrent_info.name}")
+                success = False
+        if success and not media_info:
+            media_info = self.chain.recognize_media(meta=meta)
+            if not media_info:
+                logger.error(f"识别媒体信息失败，种子名称：{torrent_info.name}")
+                success = False
+        if success:
+            if self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info):
+                logger.info(f"种子 {torrent_info.name} 处理完成")
+                return True
+        # 处理失败
+        return False
 
     def get_downloader(self, downloader: str):
         """
@@ -466,6 +640,19 @@ class FormatDownPath(_PluginBase):
         else:
             logger.error(f"下载器 {downloader} 不存在")
             return
+
+    def update_data(self, key: str = "pending", value: dict = None):
+        """
+        更新插件数据
+        """
+        if not value:
+            return
+        plugin_data: PluginData = self.get_data(key=key)
+        if plugin_data:
+            plugin_data.value.update(value)
+            self.save_data(key=key, value=value)
+        else:
+            self.save_data(key=key, value=value)
 
     @staticmethod
     def format_path(
@@ -499,7 +686,7 @@ class FormatDownPath(_PluginBase):
         if success and _auto_tmm:
             try:
                 logger.info(f"正在为种子 {_torrent_name} 关闭 Torrent自动管理")
-                self.downloader.set_auto_tmm(torrent_hashes=_torrent_hash, enable=False)
+                self.downloader.set_auto_tmm(torrent_hash=_torrent_hash, enable=False)
                 logger.info(f"Torrent自动管理 关闭成功 - {_torrent_name}")
             except Exception as e:
                 logger.error(f"Torrent自动管理 关闭失败，种子：{_torrent_name}，hash: {_torrent_hash}，错误：{str(e)}")
@@ -531,27 +718,13 @@ class FormatDownPath(_PluginBase):
                 try:
                     new_path = str(new_path)
                     logger.info(f"开始更改种子 {_torrent_name} 保存路径：{save_path} ==> {new_path}")
-                    self.downloader.set_torrent_save_path(torrent_hashes=_torrent_hash, location=new_path)
+                    self.downloader.set_torrent_save_path(torrent_hash=_torrent_hash, location=new_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
                     logger.info(f"更改种子保存路径成功：{_torrent_name}，新路径：{new_path}")
                 except Exception as e:
                     logger.error(f"更改种子保存路径失败：{str(e)}")
                     success = False
-        # 重命名种子名称
-        if success and self._rename_torrent:
-            logger.info(f"{_torrent_name} 开始重命名种子名称")
-            new_name = self.format_path(
-                    template_string=self._format_torrent_name,
-                    meta=meta,
-                    mediainfo=media_info)
-            try:
-                if str(new_name) != _torrent_name:
-                    self.downloader.torrents_rename(torrent_hashes=_torrent_hash, new_torrent_name=str(new_name))
-                    logger.info(f"重命名成功：{_torrent_name} ==> {new_name}")
-            except Exception as e:
-                logger.error(f"重命名失败：{str(e)}")
-                success = False
         # 重命名种子文件
         if success and self._rename_file and _format_file_path:
             logger.info(f"{_torrent_name} 开始重命名种子文件")
@@ -570,10 +743,10 @@ class FormatDownPath(_PluginBase):
                 try:
                     file_path = Path(_file_name)
                     file_suffix = file_path.suffix
-                    meta = MetaInfoPath(file_path)
+                    file_meta = MetaInfoPath(file_path)
                     _file_new_path = self.format_path(
                         template_string=_format_file_path,
-                        meta=meta,
+                        meta=file_meta,
                         mediainfo=media_info,
                         file_ext=file_suffix)
                     new_file_path = str(_file_new_path)
@@ -588,6 +761,21 @@ class FormatDownPath(_PluginBase):
                 except Exception as e:
                     logger.error(f"种子文件 {_file_name} 重命名失败：{str(e)}")
                     success = False
+        # 重命名种子名称
+        if success and self._rename_torrent:
+            logger.info(f"{_torrent_name} 开始重命名种子名称")
+            new_name = self.format_path(
+                    template_string=self._format_torrent_name,
+                    meta=meta,
+                    mediainfo=media_info)
+            try:
+                logger.critical(str(new_name))
+                if str(new_name) != _torrent_name:
+                    self.downloader.torrents_rename(torrent_hash=_torrent_hash, old_path=_torrent_name, new_torrent_name=str(new_name))
+                    logger.info(f"重命名成功：{_torrent_name} ==> {new_name}")
+            except Exception as e:
+                logger.error(f"重命名失败：{str(e)}")
+                success = False
         # 更新数据库
         self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
@@ -615,6 +803,14 @@ class FormatDownPath(_PluginBase):
                 safe_replace(d, old_path, new_path)
         return downloadhis, downfiles
     
+    @staticmethod
+    @db_query
+    def get_plugin_data(db: Session, plugin_ids: list[str], last_id: int = 0) -> List[PluginData]:
+        return db.query(PluginData).filter(
+            (PluginData.id > last_id) &
+            (PluginData.plugin_id.in_(plugin_ids))
+        ).all()
+
     @staticmethod
     @db_update
     def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
@@ -647,7 +843,7 @@ class FormatDownPath(_PluginBase):
         """
         更新数据库
         """
-        db = DbOper()._db
+        db = self.plugindata._db
         if downloadhis:
             for id, data in downloadhis.items():
                 self.update_download_history_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
@@ -656,23 +852,3 @@ class FormatDownPath(_PluginBase):
             for id, data in downfiles.items():
                 self.update_download_file_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
 
-if __name__ == "__main__":
-    # 测试用例
-    fdp = FormatDownPath()
-    fdp.init_plugin()
-    fdp._enabled = True
-    fdp._rename_file = True
-    fdp._rename_torrent = True
-    fdp._format_torrent_name = "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ __meta__.begin_season }}{% endif %} {% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %} {% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %} {% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %} {% endif %}"
-    fdp._format_save_path = "{{title}}{% if year %} ({{year}}){% endif %}"
-    fdp._format_movie_path = "{% if season %}Season {{season}}/{% endif %}{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}"
-    fdp.get_downloader("local")
-    # fdp.get_downloader("tr")
-    torrent_info = fdp.downloader.torrents_info(
-        torrent_hashes="d567d5eed678a3d53d96988fb9c53b0fc4629b0b"
-    )
-    meta = MetaInfo(
-        "Spy.x.Family.Code.White.2023.V2.1080p.JPN.BluRay.x265.10bit.DTS.2Audio-ADE"
-    )
-    media_info = fdp.chain.recognize_media(meta=meta)
-    fdp.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info)
