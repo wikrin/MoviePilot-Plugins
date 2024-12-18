@@ -190,7 +190,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -549,7 +549,8 @@ class FormatDownPath(_PluginBase):
             if self.main(downloader, hash, meta=context.meta_info, media_info=context.media_info):
                 return
         # 保存未完成数据
-        pending = self.get_data(key="pending").value or {}
+        pending = self.get_data(key="pending")
+        pending = pending.value if pending else {}
         pending[hash] = downloader
         self.update_data(pending)
 
@@ -598,14 +599,14 @@ class FormatDownPath(_PluginBase):
         :param media_info: 媒体信息
         :return: 处理结果
         """
-        success = False
+        success = True
         self.get_downloader(downloader)
         if self.downloader is None:
             # 未启用或不存在, 跳过这个种子
+            success = False
+            logger.warn(f"跳过处理种子 {hash}，下载器 {downloader} 不存在或未启用")
             return True
-        if self.downloader:
-            success = True
-            logger.info(f"已连接下载器: {downloader}")
+        logger.info(f"已连接下载器: {downloader}")
         if success:
             torrent_info = self.downloader.torrents_info(hash)
             # 缺少细节处理, 例如种子被手动删除或转移
@@ -642,8 +643,8 @@ class FormatDownPath(_PluginBase):
             else:
                 self.downloader: Downloader = TransmissionDownloader(trc=service.instance)
         else:
-            logger.error(f"下载器 {downloader} 不存在")
-            return
+            # 暂时设为None, 跳过
+            self.downloader = None
 
     def update_data(self, key: str = "pending", value: dict = None):
         """
@@ -721,7 +722,6 @@ class FormatDownPath(_PluginBase):
             if new_path != save_path:
                 try:
                     new_path = str(new_path)
-                    logger.info(f"开始更改种子 {_torrent_name} 保存路径：{save_path} ==> {new_path}")
                     self.downloader.set_torrent_save_path(torrent_hash=_torrent_hash, location=new_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
@@ -731,7 +731,7 @@ class FormatDownPath(_PluginBase):
                     success = False
         # 重命名种子文件
         if success and self._rename_file and _format_file_path:
-            logger.info(f"{_torrent_name} 开始重命名种子文件")
+            logger.info(f"{_torrent_name} 开始重命名种子文件...")
             torrent_files: list[TorrentFile] = torrent_info.files
             for file in torrent_files:
                 _file_name = file.name
@@ -767,18 +767,16 @@ class FormatDownPath(_PluginBase):
                     success = False
         # 重命名种子名称
         if success and self._rename_torrent:
-            logger.info(f"{_torrent_name} 开始重命名种子名称")
             new_name = self.format_path(
                     template_string=self._format_torrent_name,
                     meta=meta,
                     mediainfo=media_info)
             try:
-                logger.critical(str(new_name))
                 if str(new_name) != _torrent_name:
                     self.downloader.torrents_rename(torrent_hash=_torrent_hash, old_path=_torrent_name, new_torrent_name=str(new_name))
-                    logger.info(f"重命名成功：{_torrent_name} ==> {new_name}")
+                    logger.info(f"种子重命名成功：{_torrent_name} ==> {new_name}")
             except Exception as e:
-                logger.error(f"重命名失败：{str(e)}")
+                logger.error(f"种子重命名失败：{str(e)}")
                 success = False
         # 更新数据库
         self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
