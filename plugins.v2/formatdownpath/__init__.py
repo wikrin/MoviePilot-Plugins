@@ -121,7 +121,7 @@ class QbittorrentDownloader(Downloader):
         """
         根据哈希获取种子信息
         """
-        torrent_info = self.qbc.torrents_info(torrent_hash=torrent_hash)
+        torrent_info = self.qbc.torrents_info(torrent_hashes=torrent_hash)
         if torrent_info:
             torrent_info: TorrentDictionary = torrent_info[0]
             torrent_info = TorrentInfo(
@@ -632,10 +632,11 @@ class FormatDownPath(_PluginBase):
         logger.info(f"已连接下载器: {downloader}")
         if success:
             torrent_info = self.downloader.torrents_info(hash)
-            # 缺少细节处理, 例如种子被手动删除或转移
+            # 种子被手动删除或转移
             if not torrent_info:
-                logger.error(f"种子信息获取失败，种子哈希：{hash}")
                 success = False
+                logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
+                return True
         if success and not meta:
             meta = MetaInfo(torrent_info.name)
             if not meta:
@@ -701,7 +702,6 @@ class FormatDownPath(_PluginBase):
                 meta=meta, mediainfo=mediainfo, file_ext=file_ext)
 
         rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
-        logger.debug(rename_dict)
         return FileManagerModule.get_rename_path(template_string, rename_dict)
 
     def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> bool:
