@@ -588,7 +588,6 @@ class FormatDownPath(_PluginBase):
         # 获取插件数据
         plugin_data = self.get_plugin_data(db=self.plugindata._db, plugin_ids=plugin_ids, last_id=self._last_id)
         if plugin_data:
-            self._last_id = plugin_data[-1].id
             pending.update(self.process_plugin_data(plugin_data))
         if pending:
             for hash, downloader in pending.items():
@@ -596,8 +595,9 @@ class FormatDownPath(_PluginBase):
                     _failures[hash] = downloader
         if _failures:
             self.update_data(_failures)
-        # 保存已处理数据库ID
-        self.__update_config()
+        # 保存已处理数据库
+        if plugin_data and self._last_id < plugin_data[-1].id:
+            self.__update_config()
 
     def process_plugin_data(self, plugins_data: List[PluginData]) -> Dict[str, str]:
         """
