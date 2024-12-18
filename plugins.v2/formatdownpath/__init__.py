@@ -190,7 +190,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -561,7 +561,8 @@ class FormatDownPath(_PluginBase):
         # 使用插件数据
         plugin_ids = ["TorrentTransfer", "IYUUAutoSeed"]
         # 获取待处理数据
-        pending = self.get_data(key="pending").value or {}
+        pending = self.get_data(key="pending")
+        pending = pending.value if pending else {}
         # 获取插件数据
         plugin_data = self.get_plugin_data(db=self.plugindata._db, plugin_ids=plugin_ids, last_id=self._last_id)
         if plugin_data:
