@@ -246,7 +246,7 @@ class FormatDownPath(_PluginBase):
             if not self._last_id:
                 # 初始化插件数据
                 self.save_data(key=self._pending_key, value={})
-                self._last_id = self.get_data(key=self._pending_key).value.get("last_id", 0)
+                self._last_id = self.get_data()[0].id
                 self.__update_config()
 
     def __update_config(self):
@@ -572,7 +572,7 @@ class FormatDownPath(_PluginBase):
             if self.main(downloader, hash, meta=context.meta_info, media_info=context.media_info):
                 return
         # 保存未完成数据
-        pending = self.get_data(key=self._pending_key).value
+        pending = self.get_data(key=self._pending_key) or {}
         pending[hash] = downloader
         self.update_data(pending)
 
@@ -584,7 +584,7 @@ class FormatDownPath(_PluginBase):
         # 使用插件数据
         plugin_ids = ["TorrentTransfer", "IYUUAutoSeed"]
         # 获取待处理数据
-        pending = self.get_data(key=self._pending_key).value
+        pending: dict = self.get_data(key=self._pending_key) or {}
         # 获取插件数据
         plugin_data = self.get_plugin_data(db=self.plugindata._db, plugin_ids=plugin_ids, last_id=self._last_id)
         if plugin_data:
@@ -675,12 +675,12 @@ class FormatDownPath(_PluginBase):
         """
         if not value:
             return
-        plugin_data: PluginData = self.get_data(key=key)
+        plugin_data: dict = self.get_data(key=key)
         if plugin_data:
-            plugin_data.value.update(value)
-            self.save_data(key=key, value=value)
+            plugin_data.update(value)
+            self.save_data(key=key, value=plugin_data)
         else:
-            self.save_data(key=key, value=value)
+            self.save_data(key=key, value=plugin_data)
 
     @staticmethod
     def format_path(
