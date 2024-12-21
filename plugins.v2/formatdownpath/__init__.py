@@ -16,6 +16,7 @@ from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
 from app.db import db_update
+from app.db.models.plugindata import PluginData
 from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
@@ -129,7 +130,7 @@ class QbittorrentDownloader(Downloader):
                     hash=torrent_info.get('hash'),
                     auto_tmm=torrent_info.get('auto_tmm'),
                     category=torrent_info.get('category'),
-                    tags=torrent_info.get('tags'),
+                    tags=torrent_info.get('tags').split(","),
                     files= [
                         TorrentFile(
                             name=file.get('name'),
@@ -171,7 +172,7 @@ class TransmissionDownloader(Downloader):
                 torrents.append(TorrentInfo(
                     name = torrent_info.name,
                     save_path = torrent_info.download_dir,
-                    tags=torrent_info.group,
+                    tags=torrent_info.labels,
                     total_size = torrent_info.total_size,
                     hash=torrent_info.hashString,
                     # 种子文件列表
@@ -193,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.12"
+    plugin_version = "1.0.13"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -215,6 +216,7 @@ class FormatDownPath(_PluginBase):
     _rename_torrent: bool = False
     _rename_file: bool = False
     _downloader: list = []
+    _exclude_dirs: str = ""
     _format_save_path: str = ""
     _format_torrent_name: str = ""
     _format_movie_path: str = ""
@@ -239,6 +241,7 @@ class FormatDownPath(_PluginBase):
                 "rename_torrent",
                 "rename_file",
                 "downloader",
+                "exclude_dirs",
                 "format_save_path",
                 "format_torrent_name",
                 "format_movie_path",
@@ -257,20 +260,47 @@ class FormatDownPath(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
+                                'props': {'cols': 6, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'event_enabled',
+                                            'label': '启用事件监听',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 6, 'md': 3},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
                                         'props': {
                                             'model': 'cron_enabled',
                                             'label': '启用定时任务',
-                                        },
-                                    },
-                                ],
+                                        }
+                                    }
+                                ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
+                                'props': {'cols': 6, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VTextField',
+                                        'props': {
+                                            'model': 'cron',
+                                            'label': '执行周期',
+                                            'placeholder': '0 8 * * *',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 6, 'md': 3},
                                 'content': [
                                     {
                                         'component': 'VSelect',
@@ -281,198 +311,265 @@ class FormatDownPath(_PluginBase):
                                             'multiple': False,
                                             'clearable': True,
                                             'items': _downloaders,
-                                        },
-                                    },
-                                ],
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '执行周期',
-                                            'placeholder': '0 8 * * *',
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
                     },
                     {
-                        'component': 'VRow',
+                        'component': 'VTabs',
+                        'props': {
+                            'model': '_tabs',
+                            'style': {
+                                'margin-top': '16px',
+                                'margin-bottom': '16px',
+                            },
+                            'stacked': False,
+                            'fixed-tabs': True
+                        },
                         'content': [
                             {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'event_enabled',
-                                            'label': '启用事件监听',
-                                        },
-                                    },
-                                ],
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'rename_torrent',
-                                            'label': '种子重命名',
-                                        },
-                                    },
-                                ],
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'rename_file',
-                                            'label': '种子文件重命名(实验功能)',
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'format_save_path',
-                                            'label': '自定义保存路径格式',
-                                            'placeholder': '使用Jinja2语法',
-                                            'clearable': True,
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'format_torrent_name',
-                                            'label': '自定义种子标题重命名格式',
-                                            'placeholder': '使用Jinja2语法',
-                                            'clearable': True,
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'format_movie_path',
-                                            'label': '自定义电影文件重命名格式',
-                                            'placeholder': '使用Jinja2语法',
-                                            'clearable': True,
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VTextarea',
-                                        'props': {
-                                            'model': 'format_tv_path',
-                                            'label': '自定义电视剧文件重命名格式',
-                                            'placeholder': '使用Jinja2语法',
-                                            'clearable': True,
-                                        },
-                                    },
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
+                                'component': 'VTab',
                                 'props': {
-                                    'cols': 12,
+                                    'value': 'basic_tab'
+                                },
+                                'text': '基本设置'
+                            },
+                            {
+                                'component': 'VTab',
+                                'props': {
+                                    'value': 'critical_tab'
+                                },
+                                'text': '实验性功能'
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'VWindow',
+                        'props': {
+                            'model': '_tabs'
+                        },
+                        'content': [
+                            {
+                                'component': 'VWindowItem',
+                                'props': {
+                                    'value': 'basic_tab'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'warning',
-                                            'variant': 'tonal',
-                                            'text': '谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度'
-                                        },
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12,
+                                                    'style': {
+                                                        'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
+                                                        },
+                                                    },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'format_save_path',
+                                                            'label': '保存路径格式',
+                                                            'hint': '使用Jinja2语法, 不会覆盖原保存路径, 仅追加',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     },
-                                ],
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextarea',
+                                                        'props': {
+                                                            'rows': 3,
+                                                            'auto-grow': True,
+                                                            'model': 'exclude_dirs',
+                                                            'label': '排除目录',
+                                                            'hint': '排除目录, 一行一个, 路径深度不能超过保存路径',
+                                                            'placeholder': ' 例如:\n /mnt/download \n E:\download',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 8, 'md': 4},
+                                                'content': [
+                                                    {
+                                                        'component': 'VSwitch',
+                                                        'props': {
+                                                            'model': 'rename_torrent',
+                                                            'label': '种子重命名',
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextarea',
+                                                        'props': {
+                                                            'model': 'format_torrent_name',
+                                                            'label': '种子标题重命名格式',
+                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VAlert',
+                                                        'props': {
+                                                            'type': 'info',
+                                                            'variant': 'tonal',
+                                                            'text': '种子重命名: 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
                             },
-                        ],
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
                             {
-                                'component': 'VCol',
+                                'component': 'VWindowItem',
                                 'props': {
-                                    'cols': 12,
+                                    'value': 'critical_tab'
                                 },
                                 'content': [
                                     {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': '种子重命名: 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
-                                        },
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 8, 'md': 4},
+                                                'content': [
+                                                    {
+                                                        'component': 'VSwitch',
+                                                        'props': {
+                                                            'model': 'rename_file',
+                                                            'label': '种子文件重命名(实验功能)',
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
                                     },
-                                ],
-                            },
-                        ],
-                    },
-                ],
-            },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextarea',
+                                                        'props': {
+                                                            'rows': 3,
+                                                            'auto-grow': True,
+                                                            'model': 'format_movie_path',
+                                                            'label': '电影文件重命名格式',
+                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 12},
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextarea',
+                                                        'props': {
+                                                            'rows': 3,
+                                                            'auto-grow': True,
+                                                            'model': 'format_tv_path',
+                                                            'label': '电视剧文件重命名格式',
+                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VAlert',
+                                                        'props': {
+                                                            'type': 'warning',
+                                                            'variant': 'tonal',
+                                                            'text': '谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度'
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
         ], {
             "cron_enabled": False,
             "downloader": [],
-            "cron": "0 8 * * *",
+            "exclude_dirs": "",
+            "cron": "",
             "event_enabled": False,
             "rename_torrent": False,
             "rename_file": False,
@@ -543,13 +640,43 @@ class FormatDownPath(_PluginBase):
 
     def cron_process_main(self):
         """
-        定时任务处理流程
+        定时任务处理下载器中的种子
         """
-        _failures = {}
+        # 失败数据列表
+        _failures: dict[str, str] = {}
         # 获取待处理数据
-        pending: dict = self.get_data(key="pending") or {}
+        pending: dict[str, str] = self.get_data(key="pending") or {}
         # 获取已处理数据
-        processed: dict = self.get_data(key="processed") or {}
+        processed: dict[str, str] = self.get_data(key="processed") or {}
+        _processed_num = 0
+
+        def create_hash_mapping() -> Dict[str, List[str]]:
+            """
+            生成源种子hash表
+            """
+            # 辅种插件数据
+            assist: List[PluginData] = self.get_data(key=None, plugin_id="IYUUAutoSeed") or []
+            # 辅种数据映射表 key: 源种hash, value: 辅种hash列表
+            _mapping: dict[str, List[str]] = {}
+
+            if assist:
+                for seed_data in assist:
+                    hashes = []
+                    for a in seed_data.value:
+                        hashes.extend(a.get("torrents", []))
+                    if seed_data.key in _mapping:
+                        # 辅种插件中使用的源种子hash是下载的, 将辅种hash列表合并
+                        _mapping[seed_data.key].extend(hashes)
+                    else:
+                        # 辅种插件中使用的源种子hash不是字典的键, 需要再次判断是不是辅种产生的种子
+                        for _current_hash, _hashes in _mapping.items():
+                            if seed_data.key in _hashes:
+                                _mapping[_current_hash].extend(hashes)
+                                break
+                        # 不是辅种产生的种子, 作为源种子添加
+                        _mapping[seed_data.key] = hashes
+            return _mapping
+
         # 从下载器获取种子信息
         for d in self._downloader:
             self.set_downloader(d)
@@ -558,33 +685,37 @@ class FormatDownPath(_PluginBase):
                 continue
             torrents_info = [torrent_info for torrent_info in self.downloader.torrents_info() if torrent_info.hash not in processed or torrent_info.hash in pending]
             if torrents_info:
+                _hash = ""
+                # 先生成源种子hash表
+                assist_mapping = create_hash_mapping()
                 for torrent_info in torrents_info:
-                    meta: MetaBase = None
-                    media_info: MediaInfo = None
+                    if assist_mapping:
+                        for source_hash, seeds in assist_mapping.items():
+                            if torrent_info.hash in seeds:
+                                # 使用源下载种子识别
+                                _hash = source_hash
+                                break
                     # 通过hash查询下载历史记录
-                    downloadhis = DownloadHistoryOper().get_by_hash(torrent_info.hash)
-                    if downloadhis:
-                        # 使用历史记录的识别信息
-                        meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
-                        media_info = self.chain.recognize_media(meta=meta, tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
-                    else:
-                        logger.warn(f"在历史记录中没有找到种子: {torrent_info.name} 识别信息可能不准确")
-                    
+                    downloadhis = DownloadHistoryOper().get_by_hash(_hash or torrent_info.hash)
                     # 执行处理
-                    if self.main(torrent_info=torrent_info, meta=meta, media_info=media_info):
+                    if self.main(torrent_info=torrent_info, downloadhis=downloadhis):
                         # 添加到已处理数据库
                         processed[torrent_info.hash] = d
+                        # 本次处理成功计数
+                        _processed_num += 1
                     else:
                         # 添加到失败数据库
                         _failures[torrent_info.hash] = d
         # 更新数据库
         if _failures:
             self.update_data("pending", _failures)
+            logger.info(f"失败 {len(_failures)} 个")
         if processed:
             self.update_data("processed", processed)
+            logger.info(f"成功 {_processed_num} 个, 合计 {len(processed)} 个种子已保存至历史")
         # 保存已处理数据库
 
-    def main(self, downloader: str = None, 
+    def main(self, downloader: str = None, downloadhis: DownloadHistory = None,
              hash: str =None, torrent_info: TorrentInfo = None, 
              meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
         """
@@ -604,15 +735,28 @@ class FormatDownPath(_PluginBase):
             success = False
             logger.warn(f"未连接下载器")
         if success and not torrent_info:
-            torrent_info = self.downloader.torrents_info(hash)
-            # 种子被手动删除或转移
-            if not torrent_info:
-                success = False
-                logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
-                return True
-            # 取第一个种子
-            torrent_info = torrent_info[0]
+            if hash:
+                torrent_info = self.downloader.torrents_info(hash)
+                # 种子被手动删除或转移
+                if not torrent_info:
+                    success = False
+                    logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
+                    return True
+                # 取第一个种子
+                torrent_info = torrent_info[0]
+        # 保存目录排除
+        if success and self._exclude_dirs:
+            for exclude_dir in self._exclude_dirs.split("\n"):
+                if exclude_dir and exclude_dir in str(torrent_info.save_path):
+                    success = False
+                    logger.info(f"{torrent_info.name} 保存路径: {torrent_info.save_path} 命中排除目录：{exclude_dir}")
+                    return True
+        if success and downloadhis:
+            # 使用历史记录的识别信息
+            meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
+            media_info = self.chain.recognize_media(meta=meta, tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
         if success and not meta:
+            logger.warn(f"未找到与之关联的下载种子 {torrent_info.name} 元数据识别可能不准确")
             meta = MetaInfo(torrent_info.name)
             if not meta:
                 logger.error(f"元数据获取失败，种子名称：{torrent_info.name}")
