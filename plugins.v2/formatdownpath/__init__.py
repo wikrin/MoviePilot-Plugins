@@ -193,7 +193,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.10"
+    plugin_version = "1.0.11"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -247,7 +247,7 @@ class FormatDownPath(_PluginBase):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
     def get_form(self):
-        _downloaders = [{"title": d.get("name"), "value": d.get("name")} for d in SystemConfigOper().get(SystemConfigKey.Downloaders) if d.get("enabled")]
+        _downloaders = [{"title": d.get("name"), "value": [d.get("name")]} for d in SystemConfigOper().get(SystemConfigKey.Downloaders) if d.get("enabled")]
         return [
             {
                 'component': 'VForm',
@@ -279,6 +279,7 @@ class FormatDownPath(_PluginBase):
                                             'label': '选择下载器',
                                             # 'chips': True,
                                             'multiple': False,
+                                            'clearable': True,
                                             'items': _downloaders,
                                         },
                                     },
