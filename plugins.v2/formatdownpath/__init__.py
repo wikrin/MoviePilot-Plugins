@@ -193,7 +193,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.11"
+    plugin_version = "1.0.12"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -558,13 +558,25 @@ class FormatDownPath(_PluginBase):
                 continue
             torrents_info = [torrent_info for torrent_info in self.downloader.torrents_info() if torrent_info.hash not in processed or torrent_info.hash in pending]
             if torrents_info:
-                for torrnet_info in torrents_info:
-                    if self.main(torrent_info=torrnet_info):
+                for torrent_info in torrents_info:
+                    meta: MetaBase = None
+                    media_info: MediaInfo = None
+                    # 通过hash查询下载历史记录
+                    downloadhis = DownloadHistoryOper().get_by_hash(torrent_info.hash)
+                    if downloadhis:
+                        # 使用历史记录的识别信息
+                        meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
+                        media_info = self.chain.recognize_media(meta=meta, tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
+                    else:
+                        logger.warn(f"在历史记录中没有找到种子: {torrent_info.name} 识别信息可能不准确")
+                    
+                    # 执行处理
+                    if self.main(torrent_info=torrent_info, meta=meta, media_info=media_info):
                         # 添加到已处理数据库
-                        processed[torrnet_info.hash] = d
+                        processed[torrent_info.hash] = d
                     else:
                         # 添加到失败数据库
-                        _failures[torrnet_info.hash] = d
+                        _failures[torrent_info.hash] = d
         # 更新数据库
         if _failures:
             self.update_data("pending", _failures)
