@@ -7,10 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
 from apscheduler.triggers.cron import CronTrigger
-from qbittorrentapi import TorrentDictionary
 from sqlalchemy.orm import Session
-from transmission_rpc import Torrent
-
 
 # 项目库
 from app.core.context import MediaInfo, TorrentInfo, Context
@@ -18,8 +15,8 @@ from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
-from app.db import db_query, db_update
-from app.db.models.plugindata import PluginData
+from app.db import db_update
+from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
 from app.modules.filemanager import FileManagerModule
@@ -94,7 +91,7 @@ class Downloader(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
         """
         获取种子信息
         """
@@ -117,30 +114,31 @@ class QbittorrentDownloader(Downloader):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
 
-    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
         """
-        根据哈希获取种子信息
+        获取种子信息
         """
-        torrent_info = self.qbc.torrents_info(torrent_hashes=torrent_hash)
-        if torrent_info:
-            torrent_info: TorrentDictionary = torrent_info[0]
-            torrent_info = TorrentInfo(
-                name = torrent_info.get('name'),
-                save_path = torrent_info.get('save_path'),
-                total_size = torrent_info.get('total_size'),
-                hash=torrent_info.get('hash'),
-                auto_tmm=torrent_info.get('auto_tmm'),
-                category=torrent_info.get('category'),
-                tags=torrent_info.get('tags'),
-                files= [
-                    TorrentFile(
-                        name=file.get('name'),
-                        size=file.get('size'),
-                        priority=file.get('priority'))
-                    for file in torrent_info.files
-                ]
-            )
-            return torrent_info
+        torrents = []
+        torrents_info = self.qbc.torrents_info(torrent_hashes=torrent_hash) if torrent_hash else self.qbc.torrents_info()
+        if torrents_info:
+            for torrent_info in torrents_info:
+                torrents.append(TorrentInfo(
+                    name = torrent_info.get('name'),
+                    save_path = torrent_info.get('save_path'),
+                    total_size = torrent_info.get('total_size'),
+                    hash=torrent_info.get('hash'),
+                    auto_tmm=torrent_info.get('auto_tmm'),
+                    category=torrent_info.get('category'),
+                    tags=torrent_info.get('tags'),
+                    files= [
+                        TorrentFile(
+                            name=file.get('name'),
+                            size=file.get('size'),
+                            priority=file.get('priority'))
+                        for file in torrent_info.files
+                    ]
+                ))
+            return torrents
 
 
 class TransmissionDownloader(Downloader):
@@ -157,29 +155,34 @@ class TransmissionDownloader(Downloader):
         self.trc.move_torrent_data(ids=torrent_hash, location=location)
 
     def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
-        self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_torrent_name)
+        """
+        transmission_rpc 没有`重命名种子`功能
+        """
+        pass
 
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_path)
 
-    def torrents_info(self, torrent_hash: str) -> Optional[TorrentInfo]:
-        torrent_info: Torrent = self.trc.get_torrent(torrent_id=torrent_hash)
-        if torrent_info:
-            torrent_info = TorrentInfo(
-                name = torrent_info.name,
-                save_path = torrent_info.download_dir,
-                tags=torrent_info.group,
-                total_size = torrent_info.total_size,
-                hash=torrent_info.hashString,
-                # 种子文件列表
-                files= [
-                    TorrentFile(
-                        name=file.get('name'),
-                        size=file.get('length'))
-                    for file in torrent_info.fields.get('files')
-                ]
-            )
-            return torrent_info
+    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
+        torrents = []
+        torrents_info = [self.trc.get_torrent(torrent_id=torrent_hash)] if torrent_hash else self.trc.get_torrents()
+        if torrents_info:
+            for torrent_info in torrents_info:
+                torrents.append(TorrentInfo(
+                    name = torrent_info.name,
+                    save_path = torrent_info.download_dir,
+                    tags=torrent_info.group,
+                    total_size = torrent_info.total_size,
+                    hash=torrent_info.hashString,
+                    # 种子文件列表
+                    files= [
+                        TorrentFile(
+                            name=file.get('name'),
+                            size=file.get('length'))
+                        for file in torrent_info.fields.get('files')
+                    ]
+                ))
+        return torrents
 
 
 class FormatDownPath(_PluginBase):
@@ -190,7 +193,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -204,7 +207,6 @@ class FormatDownPath(_PluginBase):
 
     # 私有属性
     _scheduler = None
-    _pending_key = "pending"
 
     # 配置属性
     _cron: str = ""
@@ -212,11 +214,11 @@ class FormatDownPath(_PluginBase):
     _event_enabled: bool = False
     _rename_torrent: bool = False
     _rename_file: bool = False
+    _downloader: list = []
     _format_save_path: str = ""
     _format_torrent_name: str = ""
     _format_movie_path: str = ""
     _format_tv_path: str = ""
-    _last_id: int = 0
 
     def init_plugin(self, config: dict = None):
 
@@ -236,6 +238,7 @@ class FormatDownPath(_PluginBase):
                 "event_enabled",
                 "rename_torrent",
                 "rename_file",
+                "downloader",
                 "format_save_path",
                 "format_torrent_name",
                 "format_movie_path",
@@ -243,30 +246,9 @@ class FormatDownPath(_PluginBase):
                 "last_id",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
-            if not self._last_id:
-                # 初始化插件数据
-                self.save_data(key=self._pending_key, value={})
-                self._last_id = self.get_data()[0].id
-                self.__update_config()
-
-    def __update_config(self):
-        """更新设置"""
-        self.update_config(
-            {
-                "cron": self._cron,
-                "cron_enabled": self._cron_enabled,
-                "event_enabled": self._event_enabled,
-                "rename_torrent": self._rename_torrent,
-                "rename_file": self._rename_file,
-                "format_save_path": self._format_save_path,
-                "format_torrent_name": self._format_torrent_name,
-                "format_movie_path": self._format_movie_path,
-                "format_tv_path": self._format_tv_path,
-                "last_id": self._last_id,
-            }
-        )
 
     def get_form(self):
+        _downloaders = [{"title": d.get("name"), "value": d.get("name")} for d in SystemConfigOper().get(SystemConfigKey.Downloaders) if d.get("enabled")]
         return [
             {
                 'component': 'VForm',
@@ -281,10 +263,10 @@ class FormatDownPath(_PluginBase):
                                     {
                                         'component': 'VSwitch',
                                         'props': {
-                                            'model': 'event_enabled',
-                                            'label': '启用事件监听',
+                                            'model': 'cron_enabled',
+                                            'label': '启用定时任务',
                                         },
-                                    }
+                                    },
                                 ],
                             },
                             {
@@ -292,12 +274,15 @@ class FormatDownPath(_PluginBase):
                                 'props': {'cols': 8, 'md': 4},
                                 'content': [
                                     {
-                                        'component': 'VSwitch',
+                                        'component': 'VSelect',
                                         'props': {
-                                            'model': 'cron_enabled',
-                                            'label': '启用定时任务',
+                                            'model': 'downloader',
+                                            'label': '选择下载器',
+                                            # 'chips': True,
+                                            'multiple': False,
+                                            'items': _downloaders,
                                         },
-                                    }
+                                    },
                                 ],
                             },
                             {
@@ -311,7 +296,7 @@ class FormatDownPath(_PluginBase):
                                             'label': '执行周期',
                                             'placeholder': '0 8 * * *',
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -326,23 +311,23 @@ class FormatDownPath(_PluginBase):
                                     {
                                         'component': 'VSwitch',
                                         'props': {
-                                            'model': 'rename_torrent',
-                                            'label': '种子重命名',
+                                            'model': 'event_enabled',
+                                            'label': '启用事件监听',
                                         },
-                                    }
+                                    },
                                 ],
                             },
                             {
                                 'component': 'VCol',
                                 'props': {'cols': 8, 'md': 4},
                                 'content': [
-                                    # {
-                                    #     'component': 'VSwitch',
-                                    #     'props': {
-                                    #         'model': '',
-                                    #         'label': '占位',
-                                    #     },
-                                    # }
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'rename_torrent',
+                                            'label': '种子重命名',
+                                        },
+                                    },
                                 ],
                             },
                             {
@@ -355,7 +340,7 @@ class FormatDownPath(_PluginBase):
                                             'model': 'rename_file',
                                             'label': '种子文件重命名(实验功能)',
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -375,7 +360,7 @@ class FormatDownPath(_PluginBase):
                                             'placeholder': '使用Jinja2语法',
                                             'clearable': True,
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -395,7 +380,7 @@ class FormatDownPath(_PluginBase):
                                             'placeholder': '使用Jinja2语法',
                                             'clearable': True,
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -415,7 +400,7 @@ class FormatDownPath(_PluginBase):
                                             'placeholder': '使用Jinja2语法',
                                             'clearable': True,
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -435,7 +420,7 @@ class FormatDownPath(_PluginBase):
                                             'placeholder': '使用Jinja2语法',
                                             'clearable': True,
                                         },
-                                    }
+                                    },
                                 ],
                             },
                         ],
@@ -455,32 +440,11 @@ class FormatDownPath(_PluginBase):
                                             'type': 'warning',
                                             'variant': 'tonal',
                                             'text': '谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'warning',
-                                            'variant': 'tonal',
-                                            'text': '种子重命名 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子文件结构; Transmission 会修改种子文件结构, 有辅种需求不要开启'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
                     },
                     {
                         'component': 'VRow',
@@ -496,22 +460,23 @@ class FormatDownPath(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
-                                            'text': '事件监听 为MP添加下载任务触发, 仅处理添加下载的种子, 定时任务 为获取转种/辅种 插件数据并处理'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
+                                            'text': '种子重命名: 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
                     },
                 ],
             },
         ], {
-            "corn": "0 8 * * *",
             "cron_enabled": False,
+            "downloader": [],
+            "cron": "0 8 * * *",
             "event_enabled": False,
             "rename_torrent": False,
             "rename_file": False,
-            "format_torrent_name": self._format_torrent_name or "{{ title }}{% if year %} ({{ year }}){% endif %} - {% if __meta__.begin_season %}S{{ __meta__.begin_season }}{% endif %}{% if __meta__.end_season %} - S{{ __meta__.end_season }}{% endif %}{% if __meta__.begin_episode %}E{{ __meta__.begin_episode }}{% endif %}{% if __meta__.end_episode %} - E{{ __meta__.end_episode }}{% endif %}",
+            "format_torrent_name": self._format_torrent_name or "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ '%02d'|format(__meta__.begin_season) }}{% if __meta__.end_season and __meta__.end_season != __meta__.begin_season %}-S{{ '%02d'|format(__meta__.end_season) }} - {% endif %}{% endif %}{% if __meta__.begin_episode %}{% set episode_digits = 2 %}{% if __meta__.end_episode and __meta__.end_episode|string|length > episode_digits %}{% set episode_digits = __meta__.end_episode|string|length %}{% endif %}E{{ '%0*d'|format(episode_digits, __meta__.begin_episode) }}{% if __meta__.end_episode and __meta__.end_episode != __meta__.begin_episode %}-E{{ '%0*d'|format(episode_digits, __meta__.end_episode) }}{% endif %}{% endif %}{% endif %}",
             "format_save_path": self._format_save_path or "{{title}}{% if year %} ({{year}}){% endif %}",
             "format_movie_path": self._format_movie_path or "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
             "format_tv_path": self._format_tv_path or "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
@@ -572,71 +537,69 @@ class FormatDownPath(_PluginBase):
             if self.main(downloader, hash, meta=context.meta_info, media_info=context.media_info):
                 return
         # 保存未完成数据
-        pending = self.get_data(key=self._pending_key) or {}
+        pending = self.get_data(key="pending") or {}
         pending[hash] = downloader
-        self.update_data(pending)
+        self.update_data("pending", pending)
 
     def cron_process_main(self):
         """
         定时任务处理流程
         """
         _failures = {}
-        # 使用插件数据
-        plugin_ids = ["TorrentTransfer", "IYUUAutoSeed"]
         # 获取待处理数据
-        pending: dict = self.get_data(key=self._pending_key) or {}
-        # 获取插件数据
-        plugin_data = self.get_plugin_data(db=self.plugindata._db, plugin_ids=plugin_ids, last_id=self._last_id)
-        if plugin_data:
-            pending.update(self.process_plugin_data(plugin_data))
-        if pending:
-            for hash, downloader in pending.items():
-                if not self.main(downloader, hash):
-                    _failures[hash] = downloader
+        pending: dict = self.get_data(key="pending") or {}
+        # 获取已处理数据
+        processed: dict = self.get_data(key="processed") or {}
+        # 从下载器获取种子信息
+        for d in self._downloader:
+            self.set_downloader(d)
+            if self.downloader is None:
+                logger.warn(f"下载器: {d} 不存在或未启用")
+                continue
+            torrents_info = [torrent_info for torrent_info in self.downloader.torrents_info() if torrent_info.hash not in processed or torrent_info.hash in pending]
+            if torrents_info:
+                for torrnet_info in torrents_info:
+                    if self.main(torrent_info=torrnet_info):
+                        # 添加到已处理数据库
+                        processed[torrnet_info.hash] = d
+                    else:
+                        # 添加到失败数据库
+                        _failures[torrnet_info.hash] = d
+        # 更新数据库
         if _failures:
-            self.update_data(_failures)
+            self.update_data("pending", _failures)
+        if processed:
+            self.update_data("processed", processed)
         # 保存已处理数据库
-        if plugin_data and self._last_id < plugin_data[-1].id:
-            self.__update_config()
 
-    def process_plugin_data(self, plugins_data: List[PluginData]) -> Dict[str, str]:
-        """
-        处理从数据库获取的插件数据
-        """
-        data = {}
-        for pd in plugins_data:
-            if pd.plugin_id == "TorrentTransfer":
-                data[pd.value.get("to_download_id")] = pd.value.get("to_download")
-            else:
-                downloader = pd.value[0].get("downloader")
-                for hash in pd.value[0].get("torrents"):
-                    data[hash] = downloader
-        return data
-
-    def main(self, downloader: str, hash: str, meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
+    def main(self, downloader: str = None, 
+             hash: str =None, torrent_info: TorrentInfo = None, 
+             meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
         """
         处理单个种子
         :param downloader: 下载器名称
         :param hash: 种子哈希
+        :param torrent_info: 种子信息
         :param meta: 文件元数据
         :param media_info: 媒体信息
         :return: 处理结果
         """
         success = True
-        self.get_downloader(downloader)
+        if downloader:
+            # 设置下载器
+            self.set_downloader(downloader)
         if self.downloader is None:
-            # 未启用或不存在, 跳过这个种子
             success = False
-            logger.warn(f"跳过处理种子 {hash}，下载器 {downloader} 不存在或未启用")
-            return True
-        logger.info(f"已连接下载器: {downloader}")
-        if success:
+            logger.warn(f"未连接下载器")
+        if success and not torrent_info:
             torrent_info = self.downloader.torrents_info(hash)
             # 种子被手动删除或转移
             if not torrent_info:
                 success = False
                 logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
                 return True
+            # 取第一个种子
+            torrent_info = torrent_info[0]
         if success and not meta:
             meta = MetaInfo(torrent_info.name)
             if not meta:
@@ -654,7 +617,7 @@ class FormatDownPath(_PluginBase):
         # 处理失败
         return False
 
-    def get_downloader(self, downloader: str):
+    def set_downloader(self, downloader: str):
         """
         获取下载器
         """
@@ -670,7 +633,7 @@ class FormatDownPath(_PluginBase):
             # 暂时设为None, 跳过
             self.downloader = None
 
-    def update_data(self, key: str = "pending", value: dict = None):
+    def update_data(self, key: str, value: dict = None):
         """
         更新插件数据
         """
@@ -681,7 +644,7 @@ class FormatDownPath(_PluginBase):
             plugin_data.update(value)
             self.save_data(key=key, value=plugin_data)
         else:
-            self.save_data(key=key, value=plugin_data)
+            self.save_data(key=key, value=value)
 
     @staticmethod
     def format_path(
@@ -828,14 +791,6 @@ class FormatDownPath(_PluginBase):
                 safe_replace(d, old_path, new_path)
         return downloadhis, downfiles
     
-    @staticmethod
-    @db_query
-    def get_plugin_data(db: Session, plugin_ids: list[str], last_id: int = 0) -> List[PluginData]:
-        return db.query(PluginData).filter(
-            (PluginData.id > last_id) &
-            (PluginData.plugin_id.in_(plugin_ids))
-        ).all()
-
     @staticmethod
     @db_update
     def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
