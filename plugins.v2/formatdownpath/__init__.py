@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.13"
+    plugin_version = "1.0.14"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -685,10 +685,10 @@ class FormatDownPath(_PluginBase):
                 continue
             torrents_info = [torrent_info for torrent_info in self.downloader.torrents_info() if torrent_info.hash not in processed or torrent_info.hash in pending]
             if torrents_info:
-                _hash = ""
                 # 先生成源种子hash表
                 assist_mapping = create_hash_mapping()
                 for torrent_info in torrents_info:
+                    _hash = ""
                     if assist_mapping:
                         for source_hash, seeds in assist_mapping.items():
                             if torrent_info.hash in seeds:
@@ -858,6 +858,7 @@ class FormatDownPath(_PluginBase):
             # 去除重复部分
             if common_length:
                 new_file_path = Path(*_new_parts[common_length:])
+                logger.info(f"存在 {common_length} 个公共路径，去除重复部分：{_original_parts[-(common_length + 1):]}")
             new_path = save_path / new_file_path
             # 查询数据库
             downloadhis, downfiles = self.fetch_data(torrent_hash=_torrent_hash)
@@ -867,7 +868,7 @@ class FormatDownPath(_PluginBase):
                     self.downloader.set_torrent_save_path(torrent_hash=_torrent_hash, location=new_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
-                    logger.info(f"更改种子保存路径成功：{_torrent_name}，新路径：{new_path}")
+                    logger.info(f"更改种子保存路径成功：{torrent_info.save_path} ==> {new_path}")
                 except Exception as e:
                     logger.error(f"更改种子保存路径失败：{str(e)}")
                     success = False
