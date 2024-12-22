@@ -1,10 +1,10 @@
 {
     "FormatDownPath": {
-      "name": "自定义下载路径",
-      "description": "根据自定义格式修改保存路径和种子文件名, 支持做种",
+      "name": "路径名称格式化",
+      "description": "根据自定义格式修改MP下载种子的保存路径、种子名称、种子文件名(实验功能)",
       "labels": "文件管理, 下载管理",
       "version": "1.0.15",
-      "icon": "DownloaderHelper.png",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png",
       "author": "Attente",
       "level": 1,
       "history": {

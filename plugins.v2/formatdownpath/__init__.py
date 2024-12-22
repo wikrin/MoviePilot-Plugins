@@ -188,11 +188,11 @@ class TransmissionDownloader(Downloader):
 
 class FormatDownPath(_PluginBase):
     # 插件名称
-    plugin_name = "自定义下载路径"
+    plugin_name = "路径名称格式化"
     # 插件描述
-    plugin_desc = "根据格式修改下载器保存路径"
+    plugin_desc = "根据自定义格式修改MP下载种子的保存路径、种子名称、种子文件名(实验功能)"
     # 插件图标
-    plugin_icon = "DownloaderHelper.png"
+    plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
     plugin_version = "1.0.15"
     # 插件作者
