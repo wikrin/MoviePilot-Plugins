@@ -364,7 +364,7 @@ class FormatDownPath(_PluginBase):
                                         'content': [
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 8,
+                                                'props': {'cols': 7,
                                                     'style': {
                                                         'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
                                                         },
@@ -384,7 +384,7 @@ class FormatDownPath(_PluginBase):
                                             },
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 4,
+                                                'props': {'cols': 5,
                                                     'style': {
                                                         'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
                                                         },
