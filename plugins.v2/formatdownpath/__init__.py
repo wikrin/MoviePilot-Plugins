@@ -573,10 +573,10 @@ class FormatDownPath(_PluginBase):
             "event_enabled": False,
             "rename_torrent": False,
             "rename_file": False,
-            "format_torrent_name": self._format_torrent_name or "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ '%02d'|format(__meta__.begin_season) }}{% if __meta__.end_season and __meta__.end_season != __meta__.begin_season %}-S{{ '%02d'|format(__meta__.end_season) }} - {% endif %}{% endif %}{% if __meta__.begin_episode %}{% set episode_digits = 2 %}{% if __meta__.end_episode and __meta__.end_episode|string|length > episode_digits %}{% set episode_digits = __meta__.end_episode|string|length %}{% endif %}E{{ '%0*d'|format(episode_digits, __meta__.begin_episode) }}{% if __meta__.end_episode and __meta__.end_episode != __meta__.begin_episode %}-E{{ '%0*d'|format(episode_digits, __meta__.end_episode) }}{% endif %}{% endif %}{% endif %}",
-            "format_save_path": self._format_save_path or "{{title}}{% if year %} ({{year}}){% endif %}",
-            "format_movie_path": self._format_movie_path or "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
-            "format_tv_path": self._format_tv_path or "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
+            "format_torrent_name": "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ '%02d'|format(__meta__.begin_season) }}{% if __meta__.end_season and __meta__.end_season != __meta__.begin_season %}-S{{ '%02d'|format(__meta__.end_season) }}{% endif %}{% endif %}{% if __meta__.begin_episode %}{% set episode_digits = 2 %}{% if __meta__.end_episode and __meta__.end_episode|string|length > episode_digits %}{% set episode_digits = __meta__.end_episode|string|length %}{% endif %} E{{ '%0*d'|format(episode_digits, __meta__.begin_episode) }}{% if __meta__.end_episode and __meta__.end_episode != __meta__.begin_episode %}-E{{ '%0*d'|format(episode_digits, __meta__.end_episode) }}{% endif %}{% endif %}{% endif %}",
+            "format_save_path": "{{title}}{% if year %} ({{year}}){% endif %}",
+            "format_movie_path": "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
+            "format_tv_path": "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
         }
 
     def get_service(self) -> List[Dict[str, Any]]:
@@ -631,7 +631,7 @@ class FormatDownPath(_PluginBase):
         # 获取待处理数据
         if self._event_enabled:
             context: Context = event_data.get("context")
-            if self.main(downloader, hash, meta=context.meta_info, media_info=context.media_info):
+            if self.main(downloader=downloader, hash=hash, meta=context.meta_info, media_info=context.media_info):
                 return
         # 保存未完成数据
         pending = self.get_data(key="pending") or {}
