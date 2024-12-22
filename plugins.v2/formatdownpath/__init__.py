@@ -172,7 +172,7 @@ class TransmissionDownloader(Downloader):
                 torrents.append(TorrentInfo(
                     name = torrent_info.name,
                     save_path = torrent_info.download_dir,
-                    tags=torrent_info.labels,
+                    tags=torrent_info.labels if torrent_info.labels else [''],
                     total_size = torrent_info.total_size,
                     hash=torrent_info.hashString,
                     # 种子文件列表
@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "DownloaderHelper.png"
     # 插件版本
-    plugin_version = "1.0.14"
+    plugin_version = "1.0.15"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -216,6 +216,7 @@ class FormatDownPath(_PluginBase):
     _rename_torrent: bool = False
     _rename_file: bool = False
     _downloader: list = []
+    _exclude_tags: str = ""
     _exclude_dirs: str = ""
     _format_save_path: str = ""
     _format_torrent_name: str = ""
@@ -242,6 +243,7 @@ class FormatDownPath(_PluginBase):
                 "rename_file",
                 "downloader",
                 "exclude_dirs",
+                "exclude_tags",
                 "format_save_path",
                 "format_torrent_name",
                 "format_movie_path",
@@ -362,7 +364,7 @@ class FormatDownPath(_PluginBase):
                                         'content': [
                                             {
                                                 'component': 'VCol',
-                                                'props': {'cols': 12,
+                                                'props': {'cols': 8,
                                                     'style': {
                                                         'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
                                                         },
@@ -374,6 +376,27 @@ class FormatDownPath(_PluginBase):
                                                             'model': 'format_save_path',
                                                             'label': '保存路径格式',
                                                             'hint': '使用Jinja2语法, 不会覆盖原保存路径, 仅追加',
+                                                            'clearable': True,
+                                                            'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                'component': 'VCol',
+                                                'props': {'cols': 4,
+                                                    'style': {
+                                                        'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
+                                                        },
+                                                    },
+                                                'content': [
+                                                    {
+                                                        'component': 'VTextField',
+                                                        'props': {
+                                                            'model': 'exclude_tags',
+                                                            'label': '排除标签',
+                                                            'placeholder': '注意: 空白字符会排除所有未设置标签的种子',
+                                                            'hint': '多个标签用, 分割',
                                                             'clearable': True,
                                                             'persistent-hint': True,
                                                         }
@@ -569,6 +592,7 @@ class FormatDownPath(_PluginBase):
             "cron_enabled": False,
             "downloader": [],
             "exclude_dirs": "",
+            "exclude_tags": "",
             "cron": "",
             "event_enabled": False,
             "rename_torrent": False,
@@ -751,6 +775,12 @@ class FormatDownPath(_PluginBase):
                     success = False
                     logger.info(f"{torrent_info.name} 保存路径: {torrent_info.save_path} 命中排除目录：{exclude_dir}")
                     return True
+        # 标签排除
+        if success and self._exclude_tags and \
+            (common_tags := {tag.strip() for tag in self._exclude_tags.split(",") if tag} & set(torrent_info.tags)):
+            success = False
+            logger.info(f"{torrent_info.tags} 命中排除标签：{common_tags}")
+            return True
         if success and downloadhis:
             # 使用历史记录的识别信息
             meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
