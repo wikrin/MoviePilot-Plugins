@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.0.15"
+    plugin_version = "1.1.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -375,7 +375,7 @@ class FormatDownPath(_PluginBase):
                                                         'props': {
                                                             'model': 'format_save_path',
                                                             'label': '保存路径格式',
-                                                            'hint': '使用Jinja2语法, 不会覆盖原保存路径, 仅追加',
+                                                            'hint': '使用Jinja2语法, 不会覆盖原保存路径, 仅追加. 留空不修改',
                                                             'clearable': True,
                                                             'persistent-hint': True,
                                                         }
@@ -457,6 +457,8 @@ class FormatDownPath(_PluginBase):
                                                     {
                                                         'component': 'VTextarea',
                                                         'props': {
+                                                            'rows': 2,
+                                                            'auto-grow': True,
                                                             'model': 'format_torrent_name',
                                                             'label': '种子标题重命名格式',
                                                             'hint': '使用Jinja2语法, 所用变量与主程序相同',
@@ -482,7 +484,7 @@ class FormatDownPath(_PluginBase):
                                                         'props': {
                                                             'type': 'info',
                                                             'variant': 'tonal',
-                                                            'text': '种子重命名: 重命名种子在下载器显示的标题,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
+                                                            'text': '种子重命名: 重命名种子在下载器显示的名称,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
                                                         }
                                                     }
                                                 ]
@@ -597,7 +599,7 @@ class FormatDownPath(_PluginBase):
             "event_enabled": False,
             "rename_torrent": False,
             "rename_file": False,
-            "format_torrent_name": "{{ title }}{% if year %} ({{ year }}){% endif %}{% if __meta__.begin_season or __meta__.end_season or __meta__.begin_episode or __meta__.end_episode %}{% if __meta__.begin_season %} - S{{ '%02d'|format(__meta__.begin_season) }}{% if __meta__.end_season and __meta__.end_season != __meta__.begin_season %}-S{{ '%02d'|format(__meta__.end_season) }}{% endif %}{% endif %}{% if __meta__.begin_episode %}{% set episode_digits = 2 %}{% if __meta__.end_episode and __meta__.end_episode|string|length > episode_digits %}{% set episode_digits = __meta__.end_episode|string|length %}{% endif %} E{{ '%0*d'|format(episode_digits, __meta__.begin_episode) }}{% if __meta__.end_episode and __meta__.end_episode != __meta__.begin_episode %}-E{{ '%0*d'|format(episode_digits, __meta__.end_episode) }}{% endif %}{% endif %}{% endif %}",
+            "format_torrent_name": "{{ title }}{% if year %} ({{ year }}){% endif %}{% if season_episode %} - {{season_episode}}{% endif %}",
             "format_save_path": "{{title}}{% if year %} ({{year}}){% endif %}",
             "format_movie_path": "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
             "format_tv_path": "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
