@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -657,17 +657,18 @@ class FormatDownPath(_PluginBase):
         # 获取待处理数据
         if self._event_enabled:
             context: Context = event_data.get("context")
-            # 获取已处理数据
-            processed: dict[str, str] = self.get_data(key="processed") or {}
             if self.main(downloader=downloader, hash=hash, meta=context.meta_info, media_info=context.media_info):
+                # 获取已处理数据
+                processed: dict[str, str] = self.get_data(key="processed") or {}
                 # 添加到已处理数据库
                 processed[hash] = downloader
                 # 保存已处理数据
                 self.update_data(key="processed", value=processed)
-        # 保存未完成数据
-        pending = self.get_data(key="pending") or {}
-        pending[hash] = downloader
-        self.update_data("pending", pending)
+            else:
+                # 保存未完成数据
+                pending = self.get_data(key="pending") or {}
+                pending[hash] = downloader
+                self.update_data("pending", pending)
 
     def cron_process_main(self):
         """
