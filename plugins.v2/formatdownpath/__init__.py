@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -657,8 +657,13 @@ class FormatDownPath(_PluginBase):
         # 获取待处理数据
         if self._event_enabled:
             context: Context = event_data.get("context")
+            # 获取已处理数据
+            processed: dict[str, str] = self.get_data(key="processed") or {}
             if self.main(downloader=downloader, hash=hash, meta=context.meta_info, media_info=context.media_info):
-                return
+                # 添加到已处理数据库
+                processed[hash] = downloader
+                # 保存已处理数据
+                self.update_data(key="processed", value=processed)
         # 保存未完成数据
         pending = self.get_data(key="pending") or {}
         pending[hash] = downloader
@@ -786,7 +791,8 @@ class FormatDownPath(_PluginBase):
         if success and downloadhis:
             # 使用历史记录的识别信息
             meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
-            media_info = self.chain.recognize_media(meta=meta, tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
+            media_info = self.chain.recognize_media(meta=meta, mtype=MediaType(downloadhis.type),
+                                                    tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
         if success and not meta:
             logger.warn(f"未找到与之关联的下载种子 {torrent_info.name} 元数据识别可能不准确")
             meta = MetaInfo(torrent_info.name)
@@ -890,7 +896,7 @@ class FormatDownPath(_PluginBase):
             # 去除重复部分
             if common_length:
                 new_file_path = Path(*_new_parts[common_length:])
-                logger.info(f"存在 {common_length} 个公共路径，去除重复部分：{_original_parts[-(common_length + 1):]}")
+                logger.info(f"存在 {common_length} 个公共路径，去除重复部分：{_original_parts[-common_length:]}")
             new_path = save_path / new_file_path
             # 查询数据库
             downloadhis, downfiles = self.fetch_data(torrent_hash=_torrent_hash)
