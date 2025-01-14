@@ -15,6 +15,17 @@
         "1.0.13": "提升辅种识别准确度, 新增`排除目录`",
         "1.0.12": "提升历史种子识别准确度"
       }
+    },
+    "USyncIdentifiers": {
+      "name": "识别词单向同步",
+      "description": "单向同步订阅自定义识别词至全局词表",
+      "labels": "识别, 订阅",
+      "version": "1.0.0",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/unisync_a.png",
+      "author": "Attente",
+      "level": 1,
+      "history": {
+        "1.0.0": "根据订阅事件将订阅中的识别词添加、移除、更新至全局词表"
+      }
     }
   }
-  
