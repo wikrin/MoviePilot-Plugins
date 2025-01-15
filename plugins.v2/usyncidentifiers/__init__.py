@@ -8,7 +8,6 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import pytz
 
 # 项目库
-from app.chain.transfer import TransferChain
 from app.core.config import settings
 from app.core.event import eventmanager, Event
 from app.db.subscribe_oper import SubscribeOper
@@ -44,11 +43,9 @@ class USyncIdentifiers(_PluginBase):
 
     # 配置属性
     _enabled: bool = False
-    _notify: bool = False
     _onlyonce: bool = False
 
     def init_plugin(self, config: dict = None):
-        self.transferchain = TransferChain()
         self.subscribeoper = SubscribeOper()
         self._custom_words = self.get_data("FullIdentifiers") or {}
 
@@ -164,92 +161,120 @@ class USyncIdentifiers(_PluginBase):
 
     def get_state(self):
         return self._enabled
-
-    @eventmanager.register(EventType.SubscribeAdded)
-    def handle_subscribe_added(self, event: Event):
-        if not event or not self._enabled:
-            return
-        try:
-            subscription_id = event.event_data.get("subscribe_id")
-            if subscription := self.subscribeoper.get(subscription_id):
-                custom_words_str = subscription.custom_words
-                if custom_words_str:
-                    custom_words_list = custom_words_str.split('\n')
-                    self._update_custom_identifiers(custom_words_list, subscription_id)
-        except Exception as e:
-            logger.error(f"处理订阅添加事件失败：{str(e)}")
-
-    @eventmanager.register([EventType.SubscribeDeleted, EventType.SubscribeComplete])
-    def handle_subscribe_deleted_or_completed(self, event: Event):
-        if not event or not self._enabled:
-            return
-        try:
-            subscription_id = event.event_data.get("subscribe_id")
-            subscription_info = event.event_data.get("subscribe_info", {})
-            custom_words_str = subscription_info.get("custom_words")
-            if custom_words_str:
-                custom_words_list = custom_words_str.split('\n')
-                self._remove_custom_identifiers(custom_words_list, subscription_id)
-        except Exception as e:
-            logger.error(f"处理订阅删除或完成事件失败：{str(e)}")
-
-    # @eventmanager.register(EventType.SubscribeUpdated)
-    def handle_subscribe_updated(self, event: Event):
-        if not event or not self._enabled:
-            return
-        try:
-            subscription_id = event.event_data.get("subscribe_id")
-            subscription_info = event.event_data.get("subscribe_info", {})
-            custom_words_str = subscription_info.get("custom_words")
-            if custom_words_str:
-                new_custom_words = custom_words_str.split('\n')
-                old_custom_words = self._custom_words.get(str(subscription_id), [])
-                self._update_custom_identifiers(new_custom_words, subscription_id, old_custom_words)
-        except Exception as e:
-            logger.error(f"处理订阅更新事件失败：{str(e)}")
-
+    
     def run_only_once(self):
-        if not self._enabled:
-            return
+        """
+        处理一次性任务
+        """
         try:
-            with self._lock:
-                existing_custom_words = set()
-                if self._custom_words:
-                    existing_custom_words = {word for words in self._custom_words.values() for word in words}
-                current_custom_identifiers = self.systemconfig.get(SystemConfigKey.CustomIdentifiers) or []
-                current_custom_identifiers = [word for word in current_custom_identifiers if word not in existing_custom_words]
-                subscriptions: list[Subscribe] = self.subscribeoper.list()
-                subscription_custom_words = []
-                for subscription in subscriptions:
-                    custom_words_str = subscription.custom_words
-                    if custom_words_str:
-                        custom_words_list = custom_words_str.split('\n')
-                        subscription_custom_words.extend(custom_words_list)
-                        self._custom_words[str(subscription.id)] = custom_words_list
-                if subscription_custom_words:
-                    add_words = [word for word in subscription_custom_words if word not in current_custom_identifiers]
-                    add_words.extend(current_custom_identifiers)
-                    self.systemconfig.set(SystemConfigKey.CustomIdentifiers, add_words)
+            subscriptions: list[Subscribe] = self.subscribeoper.list()
+            for subscription in subscriptions:
+                if custom_words_str := subscription.custom_words:
+                    logger.info(f"{subscription.name} ({subscription.year}) 开始同步识别词")
+                    self._add(custom_words_str.split('\n'), subscription.id)
+                else:
+                    logger.info(f"{subscription.name} ({subscription.year}) 未设置识别词")
         except Exception as e:
             logger.error(f"处理一次性任务失败：{str(e)}")
 
-    def _update_custom_identifiers(self, new_custom_words: List[str], subscription_id: int, old_custom_words: List[str] = None):
+    @eventmanager.register(EventType.SubscribeAdded)
+    def handle_subscribe_added(self, event: Event):
+        """
+        处理订阅添加事件
+        """
+        self._handle_subscription_event(event, self._add)
+
+    @eventmanager.register([EventType.SubscribeDeleted, EventType.SubscribeComplete])
+    def handle_subscribe_deleted_or_completed(self, event: Event):
+        """
+        处理订阅删除或完成事件
+        """
+        self._handle_subscription_event(event, self._remove)
+
+    @eventmanager.register(EventType.SubscribeModified)
+    def handle_subscribe_updated(self, event: Event):
+        """
+        处理订阅更新事件
+        """
+        self._handle_subscription_event(event, self._update)
+
+    def _handle_subscription_event(self, event: Event, handler):
+        """
+        处理订阅事件
+        :param event: 事件
+        :param handler: 处理函数
+        """
+        if not event or not self._enabled:
+            return
+        try:
+            # 获取订阅ID
+            subscription_id = event.event_data.get("subscribe_id")
+            # 获取订阅信息
+            subscription_info = event.event_data.get("subscribe_info", {})
+            if subscription_id and not subscription_info:
+                # 订阅添加事件从数据库获取订阅信息
+                subscription_info = self.subscribeoper.get(subscription_id).to_dict()
+            if custom_words_str := subscription_info.get("custom_words"):
+                custom_words_list = custom_words_str.split('\n')
+                handler(custom_words_list, subscription_id)
+        except Exception as e:
+            logger.error(f"处理订阅事件失败：{str(e)}")
+
+    def _add(self, add_words: List[str], subscription_id: int, index: int = 0):
+        """
+        添加识别词至词表
+        :param add_words: 添加的识别词
+        :param subscription_id: 订阅ID
+        :param index: 插入位置
+        """
         with self._lock:
-            current_custom_identifiers = self.systemconfig.get(SystemConfigKey.CustomIdentifiers) or []
-            if old_custom_words:
-                removed_words = set(old_custom_words) - set(new_custom_words)
-                current_custom_identifiers = [word for word in current_custom_identifiers if word not in removed_words]
-            added_words = [word for word in new_custom_words if word not in current_custom_identifiers]
-            added_words.extend(current_custom_identifiers)
-            self.systemconfig.set(SystemConfigKey.CustomIdentifiers, added_words)
-            self._custom_words[str(subscription_id)] = new_custom_words
+            current_identifiers = self.systemconfig.get(SystemConfigKey.CustomIdentifiers) or []
+            # 去重
+            current_identifiers = [word for word in current_identifiers if word not in add_words]
+            # 插入到指定位置
+            current_identifiers[index:index] = add_words
+            self.systemconfig.set(SystemConfigKey.CustomIdentifiers, current_identifiers)
+            logger.info(f"成功添加 {add_words} 至词表第 {index} 行")
+            self._custom_words[str(subscription_id)] = add_words
             self.save_data('FullIdentifiers', self._custom_words)
 
-    def _remove_custom_identifiers(self, custom_words_to_remove: List[str], subscription_id: int):
+    def _remove(self, remove_words: List[str], subscription_id: int) -> int:
+        """
+        从词表移除识别词
+        :param remove_words: 待移除的识别词
+        :param subscription_id: 订阅ID
+        :return: 移除识别词的起始索引
+        """
+        _index = 0
         with self._lock:
-            current_custom_identifiers = self.systemconfig.get(SystemConfigKey.CustomIdentifiers) or []
-            removed_words = set(custom_words_to_remove)
-            current_custom_identifiers = [word for word in current_custom_identifiers if word not in removed_words]
-            self.systemconfig.set(SystemConfigKey.CustomIdentifiers, current_custom_identifiers)
-            del self._custom_words[str(subscription_id)]
-            self.save_data('FullIdentifiers', self._custom_words)
+            if current_identifiers := self.systemconfig.get(SystemConfigKey.CustomIdentifiers) or []:
+                # 获取识别词位置
+                try:
+                    for word in remove_words:
+                        _index = current_identifiers.index(word)
+                        # 获取到索引即退出
+                        break
+                except ValueError:
+                    pass
+                logger.info(f"从词表移除识别词：{remove_words}")
+                current_identifiers = [word for word in current_identifiers if word not in remove_words]
+                self.systemconfig.set(SystemConfigKey.CustomIdentifiers, current_identifiers)
+                if str(subscription_id) in self._custom_words:
+                    del self._custom_words[str(subscription_id)]
+                self.save_data('FullIdentifiers', self._custom_words)
+        return _index
+    
+    def _update(self, new_words: List[str], subscription_id: int, index: int = 0):
+        """
+        更新识别词至词表
+        :param new_custom_words: 待添加的识别词
+        :param subscription_id: 订阅ID
+        :param _index: 插入位置
+        """
+        if old_words := self._custom_words.get(str(subscription_id), []):
+            if old_words == new_words:
+                # 识别词未改变，跳过更新
+                return
+            # 同一剧集顺序不同先移除全部
+            index = self._remove(old_words, subscription_id)
+        self._add(new_words, subscription_id, index)
