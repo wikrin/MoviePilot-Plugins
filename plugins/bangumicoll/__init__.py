@@ -376,10 +376,15 @@ class BangumiColl(_PluginBase):
                                 break
                         else:
                             mediainfo = self._match_group(air_date, meta, mediainfo)
-
-            exist_flag, _ = self.downloadchain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
+            # 非续作
+            elif mediainfo.type == MediaType.TV: mediainfo.season = 1
+            # 检查本地媒体
+            exist_flag, no_exists = self.downloadchain.get_no_exists_info(meta=meta, mediainfo=mediainfo)
             if exist_flag:
                 logger.info(f'{mediainfo.title_year} 媒体库中已存在')
+                continue
+            elif not no_exists.get(mediainfo.tmdb_id, {}).get(mediainfo.season):
+                logger.info(f'{mediainfo.title_year} 媒体库中已存在 第 {mediainfo.season} 季')
                 continue
             sid = self.subscribeoper.list_by_tmdbid(
                 mediainfo.tmdb_id, mediainfo.season
