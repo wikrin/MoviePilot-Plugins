@@ -196,7 +196,7 @@ class BangumiColl(_PluginBase):
             {
             "cmd": "/bangumi_coll",
             "event": EventType.PluginAction,
-            "desc": "命令名称",
+            "desc": "Bangumi收藏订阅",
             "category": "",
             "data": {"action": "dbangumi_coll"}
             }
