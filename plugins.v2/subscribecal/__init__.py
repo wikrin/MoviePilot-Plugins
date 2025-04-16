@@ -274,7 +274,8 @@ class SubscribeCal(_PluginBase):
         )
 
     def get_form(self):
-        _domain = f"http://{settings.HOST}:{settings.PORT}" if not settings.MP_DOMAIN() else settings.MP_DOMAIN()
+        _url= f"api/v1/plugin/SubscribeCal/subscribe?apikey={settings.API_TOKEN}"
+        _domain = f"http://{settings.HOST}:{settings.PORT}/" if not settings.MP_DOMAIN() else settings.MP_DOMAIN()
         return [
             {
                 'component': 'VForm',
@@ -344,7 +345,7 @@ class SubscribeCal(_PluginBase):
                                             {
                                                 'component': 'div',
                                                 'props': {'innerHTML': 
-                                                    f'启用插件保存后, ICS文件可<a href="/api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>'
+                                                    f'启用插件保存后, ICS文件可<a href="api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>'
                                                 }
                                             }
                                         ]
@@ -373,7 +374,7 @@ class SubscribeCal(_PluginBase):
                                             {
                                                 'component': 'div',
                                                 'props': {'innerHTML':
-                                                    f'订阅链接：{_domain}/api/v1/plugin/SubscribeCal/subscribe?apikey={settings.API_TOKEN}<br>'
+                                                    f'订阅链接：{_domain}{_url}<br>'
                                                     f'1. ⚠️该链接包含API密钥，请妥善保管防止泄露⚠️<br>'
                                                     f'2. 将iCal链接添加到支持订阅的日历应用（如Outlook、Google Calendar等）<br>'
                                                     f'3. 服务需公网访问，请将{_domain}替换为您的公网IP/域名'
