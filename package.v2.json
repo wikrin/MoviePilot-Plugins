@@ -27,5 +27,17 @@
       "history": {
         "1.0.0": "根据订阅事件将订阅中的识别词添加、移除、更新至全局词表 (需MP后端版本v2.2.2+)"
       }
+    },
+    "SubscribeCal": {
+      "name": "订阅日历",
+      "description": "根据订阅生成日历, 以供导入至设备日历中",
+      "labels": "工具, 订阅",
+      "version": "1.0.0",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
+      "author": "Attente",
+      "level": 1,
+      "history": {
+        "1.0.0": "施工中"
+      }
     }
   }
