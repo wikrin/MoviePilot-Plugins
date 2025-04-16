@@ -18,7 +18,7 @@
     },
     "USyncIdentifiers": {
       "name": "识别词单向同步",
-      "description": "单向同步订阅自定义识别词至全局词表",
+      "description": "订阅自定义识别词的`增、删、改`同步至全局词表以在整理时生效\n(当前订阅中的自定义识别词仅在订阅识别下载时生效)",
       "labels": "识别, 订阅",
       "version": "1.0.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/unisync_a.png",

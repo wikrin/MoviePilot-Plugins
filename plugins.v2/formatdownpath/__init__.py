@@ -420,7 +420,7 @@ class FormatDownPath(_PluginBase):
                                                             'model': 'exclude_dirs',
                                                             'label': '排除目录',
                                                             'hint': '排除目录, 一行一个, 路径深度不能超过保存路径',
-                                                            'placeholder': ' 例如:\n /mnt/download \n E:\download',
+                                                            'placeholder': r' 例如:\n /mnt/download \n E:\download',
                                                             'clearable': True,
                                                             'persistent-hint': True,
                                                         }
