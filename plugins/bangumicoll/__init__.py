@@ -273,7 +273,7 @@ class BangumiColl(_PluginBase):
                                     {
                                         'component': 'VAlert',
                                         'props': {
-                                            'type': 'info',
+                                            'type': 'success',
                                             'variant': 'tonal',
                                             'text': True
                                         },
