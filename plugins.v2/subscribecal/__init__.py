@@ -200,7 +200,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -529,6 +529,7 @@ class SubscribeCal(_PluginBase):
                                                 episode_group=sub.episode_group, mtype=MediaType(sub.type), cache=cache)
         info = None
         if cache and result_cache and cachekey in result_cache:
+            logger.info(f"{sub.name}({sub.year}) 使用缓存数据")
             info = result_cache[cachekey]
         elif sub.type == MediaType.TV.value:
             if sub.episode_group:
@@ -541,8 +542,10 @@ class SubscribeCal(_PluginBase):
         else:
             info = [CalendarInfo(**mediainfo.tmdb_info)]
         if info:
+            logger.debug(f"{sub.name}({sub.year}) 已缓存")
             result_cache[cachekey] = info
         else:
+            logger.warn(f"{sub.name}({sub.year}) 获取信息失败")
             return None
         return mediainfo, info
 
@@ -560,6 +563,8 @@ class SubscribeCal(_PluginBase):
         total_episodes = len(cal_info)
         event_data = self.get_event_data(key=_key) or {}
         for epinfo in cal_info:
+            # 跳过无日期剧集
+            if not epinfo.air_date: continue
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             ## 后续可加入jinja2模板引擎
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
@@ -579,6 +584,7 @@ class SubscribeCal(_PluginBase):
             cal.dtend=dtend
             event_data[str(epinfo.id)] = cal.dict()
         # 保存事件数据
+        logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         self.save_data(key=_key, value=event_data)
         return _key
 
