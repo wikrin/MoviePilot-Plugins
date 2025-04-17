@@ -200,7 +200,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -553,7 +553,7 @@ class SubscribeCal(_PluginBase):
         :return: key, List[CalendarEvent]
         """
         _key = SubscribeCal.get_sub_key(sub)
-        minutes = None
+        minutes = 0
         if self._calc_time \
             and mediainfo.type == MediaType.TV:
             minutes = self.generate_average_time(sub, cal_info)
@@ -564,12 +564,15 @@ class SubscribeCal(_PluginBase):
             ## 后续可加入jinja2模板引擎
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
             # 全天事件
-            if minutes is None:
+            if not minutes:
+                # 0:00 - 24:00
                 dtend = epinfo.utc_airdate(60 * 24)
             elif epinfo.runtime:
+                # start - airdatetime
                 dtend = epinfo.utc_airdate(minutes + epinfo.runtime)
             else:
-                dtend = None
+                # stdate - 24:00
+                dtend = epinfo.utc_airdate(60 * 24 - minutes)
             cal.summary=title
             cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
@@ -613,8 +616,9 @@ class SubscribeCal(_PluginBase):
             if not delay_time:
                 return 0
             # 移除极值
-            delay_time.discard(min(delay_time))
-            delay_time.discard(max(delay_time))
+            if len(delay_time) > 3:
+                delay_time.discard(min(delay_time))
+                delay_time.discard(max(delay_time))
             # 计算平均
             total_sum = sum(delay_time)
             count = len(delay_time)
@@ -633,7 +637,7 @@ class SubscribeCal(_PluginBase):
             sub_date = datetime.datetime.strptime(sub.date, "%Y-%m-%d %H:%M:%S")
             for history in histories:
                 history_date = datetime.datetime.strptime(history.date, "%Y-%m-%d %H:%M:%S")
-                if history.status == 1 and (history_date - sub_date).total_seconds() > 43200: # 12小时
+                if history.status and (history_date - sub_date).total_seconds() > 43200: # 12小时
                     eps = history.episodes.split("-")
                     episodes = range(int(eps[0][1:]), int(eps[-1][1:]) + 1)
                     for ep in episodes:

@@ -32,7 +32,7 @@
       "name": "订阅日历",
       "description": "根据订阅生成日历, 以供导入至设备日历中",
       "labels": "工具, 订阅",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
