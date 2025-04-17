@@ -208,7 +208,7 @@ class SubscribeCal(_PluginBase):
     # 插件配置项ID前缀
     plugin_config_prefix = "subscribecal_"
     # 加载顺序
-    plugin_order = 15
+    plugin_order = 42
     # 可使用的用户级别
     auth_level = 1
 
@@ -275,7 +275,7 @@ class SubscribeCal(_PluginBase):
 
     def get_form(self):
         _url= f"api/v1/plugin/SubscribeCal/subscribe?apikey={settings.API_TOKEN}"
-        _domain = f"http://{settings.HOST}:{settings.PORT}/" if not settings.MP_DOMAIN() else settings.MP_DOMAIN()
+        _domain = settings.MP_DOMAIN() or f"http://{settings.HOST}:{settings.PORT}/"
         return [
             {
                 'component': 'VForm',
@@ -285,7 +285,7 @@ class SubscribeCal(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 6, 'md': 3},
+                                'props': {'cols': 4, 'md': 2},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -303,8 +303,8 @@ class SubscribeCal(_PluginBase):
                                     {
                                         'component': 'VSwitch',
                                         'props': {
-                                            'model': 'onlyonce',
-                                            'label': '立即运行一次',
+                                            'model': 'calc_time',
+                                            'label': '根据入库补充时间',
                                         }
                                     }
                                 ]
@@ -314,10 +314,23 @@ class SubscribeCal(_PluginBase):
                                 'props': {'cols': 6, 'md': 3},
                                 'content': [
                                     {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'onlyonce',
+                                            'label': '更新一次数据',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 8, 'md': 4},
+                                'content': [
+                                    {
                                         'component': 'VTextField',
                                         'props': {
                                             'model': 'cron',
-                                            'label': '执行周期',
+                                            'label': '数据更新周期',
                                             'placeholder': '五位cron表达式, 留空自动',
                                         }
                                     }
@@ -337,7 +350,7 @@ class SubscribeCal(_PluginBase):
                                     {
                                         'component': 'VAlert',
                                         'props': {
-                                            'type': 'success',
+                                            'type': 'success' if self._enabled else 'error',
                                             'variant': 'tonal',
                                             'text': True
                                         },
@@ -345,7 +358,7 @@ class SubscribeCal(_PluginBase):
                                             {
                                                 'component': 'div',
                                                 'props': {'innerHTML': 
-                                                    f'启用插件保存后, ICS文件可<a href="api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>'
+                                                    (f'ICS文件可<a href="/api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>') if self._enabled else f'插件未启用'
                                                 }
                                             }
                                         ]
@@ -368,14 +381,15 @@ class SubscribeCal(_PluginBase):
                                         'props': {
                                             'type': 'info',
                                             'variant': 'tonal',
+                                            'style': 'display: none !important' if not self._enabled else None,
                                             'text': True
                                         },
                                         'content': [
                                             {
                                                 'component': 'div',
                                                 'props': {'innerHTML':
-                                                    f'订阅链接：{_domain}{_url}<br>'
-                                                    f'1. ⚠️该链接包含API密钥，请妥善保管防止泄露⚠️<br>'
+                                                    f'iCal链接：{_domain}{_url}<br>'
+                                                    f'1. 该链接包含API密钥，请妥善保管防止泄露⚠️⚠️<br>'
                                                     f'2. 将iCal链接添加到支持订阅的日历应用（如Outlook、Google Calendar等）<br>'
                                                     f'3. 服务需公网访问，请将{_domain}替换为您的公网IP/域名'
                                                 }
@@ -390,6 +404,7 @@ class SubscribeCal(_PluginBase):
             }
         ], {
             "enabled": False,
+            "calc_time": False,
             "onlyonce": False,
             "cron": "",
         }
@@ -406,7 +421,7 @@ class SubscribeCal(_PluginBase):
                     "id": "SubscribeCal",
                     "name": "日历数据刷新",
                     "trigger": trigger,
-                    "func": self.full_update(cache=False),
+                    "func": self.full_update,
                     "kwargs": kwargs,
                 }
             ]
@@ -458,7 +473,7 @@ class SubscribeCal(_PluginBase):
         ics_file = StringIO(self.generate_ics_content(_events))
         return responses.StreamingResponse(ics_file, media_type="text/calendar", headers={"Content-Disposition": "attachment; filename=calendar.ics"})
  
-    def full_update(self, cache: bool = True):
+    def full_update(self, cache: bool = False):
         """
         日历全量更新
         """
@@ -479,6 +494,7 @@ class SubscribeCal(_PluginBase):
                 self.del_data(key)
         # 保存key
         self.save_keys(_tmp_keys)
+        logger.info("数据更新完成")
 
     @eventmanager.register(EventType.SubscribeAdded)
     def sub_add_event(self, event: Event):
@@ -537,7 +553,7 @@ class SubscribeCal(_PluginBase):
         :return: key, List[CalendarEvent]
         """
         _key = SubscribeCal.get_sub_key(sub)
-        minutes = 0
+        minutes = None
         if self._calc_time \
             and mediainfo.type == MediaType.TV:
             minutes = self.generate_average_time(sub, cal_info)
@@ -547,10 +563,17 @@ class SubscribeCal(_PluginBase):
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             ## 后续可加入jinja2模板引擎
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
+            # 全天事件
+            if minutes is None:
+                dtend = epinfo.utc_airdate(60 * 24)
+            elif epinfo.runtime:
+                dtend = epinfo.utc_airdate(minutes + epinfo.runtime)
+            else:
+                dtend = None
             cal.summary=title
             cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
-            cal.dtend=epinfo.utc_airdate(minutes + epinfo.runtime) if epinfo.runtime else None
+            cal.dtend=dtend
             event_data[str(epinfo.id)] = cal.dict()
         # 保存事件数据
         self.save_data(key=_key, value=event_data)
@@ -572,7 +595,7 @@ class SubscribeCal(_PluginBase):
     def get_events(self, keys: list[str] = None) -> Optional[Dict[str, CalendarEvent]]:
         events: dict[str, CalendarEvent] = {}
         if not keys:
-            self.full_update()
+            self.full_update(cache=True)
             keys = self.keys
         for key in keys:
             events.update(self.get_event_data(key=key))
@@ -587,7 +610,6 @@ class SubscribeCal(_PluginBase):
         """
         def adjust_average_time(delay_time: Set[float]) -> float:
             # 检查剩余元素数量
-            dis = True
             if not delay_time:
                 return 0
             # 移除极值
