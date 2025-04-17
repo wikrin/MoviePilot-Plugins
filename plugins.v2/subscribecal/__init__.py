@@ -569,15 +569,12 @@ class SubscribeCal(_PluginBase):
             ## 后续可加入jinja2模板引擎
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
             # 全天事件
-            if not minutes:
-                # 0:00 - 24:00
-                dtend = epinfo.utc_airdate(60 * 24)
-            elif epinfo.runtime:
+            if minutes and epinfo.runtime:
                 # start - airdatetime
                 dtend = epinfo.utc_airdate(minutes + epinfo.runtime)
             else:
-                # stdate - 24:00
-                dtend = epinfo.utc_airdate(60 * 24 - minutes)
+                # 0:00 - 24:00
+                dtend = epinfo.utc_airdate(60 * 24)
             cal.summary=title
             cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
