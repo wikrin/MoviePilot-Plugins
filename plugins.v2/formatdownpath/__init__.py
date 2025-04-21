@@ -194,9 +194,9 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.3"
+    plugin_version = "1.1.2"
     # 插件作者
-    plugin_author = "Attente,qiaoyun680"
+    plugin_author = "Attente"
     # 作者主页
     author_url = "https://github.com/wikrin"
     # 插件配置项ID前缀
@@ -877,7 +877,7 @@ class FormatDownPath(_PluginBase):
             except Exception as e:
                 logger.error(f"Torrent自动管理 关闭失败，种子：{_torrent_name}，hash: {_torrent_hash}，错误：{str(e)}")
                 success = False
-        if success and (self._format_save_path != None and self._format_save_path != "" ):
+        if success:
             # 种子当前保存路径
             save_path = Path(torrent_info.save_path)
             # 种子新保存路径
@@ -943,8 +943,6 @@ class FormatDownPath(_PluginBase):
                     self.downloader.rename_file(torrent_hash=_torrent_hash, old_path=_file_name, new_path=new_file_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=_file_name, new_path=new_file_path)
-                    # 更新数据库
-                    self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
                     logger.info(f"种子文件重命名成功：{_file_name} ==> {new_file_path}")
                 except Exception as e:
                     logger.error(f"种子文件 {_file_name} 重命名失败：{str(e)}")
@@ -962,6 +960,8 @@ class FormatDownPath(_PluginBase):
             except Exception as e:
                 logger.error(f"种子重命名失败：{str(e)}")
                 success = False
+        # 更新数据库
+        self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
     
     def update_path(self, downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
