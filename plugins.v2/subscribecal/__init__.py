@@ -202,7 +202,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.3"
+    plugin_version = "1.0.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -1037,18 +1037,17 @@ class SubscribeCal(_PluginBase):
             sub_date = datetime.datetime.strptime(sub.date, "%Y-%m-%d %H:%M:%S")
             for history in histories:
                 history_date = datetime.datetime.strptime(history.date, "%Y-%m-%d %H:%M:%S")
-                if not (0 < (history_date - sub_date).total_seconds() < 60 * 10): # 排除订阅添加后的首次更新
+                if not (history_date - sub_date).total_seconds() < 60 * 10: # 排除订阅添加后的首次更新
                     eps = history.episodes.split("-")
                     episodes = range(int(eps[0][1:]), int(eps[-1][1:]) + 1)
                     for ep in episodes:
-                        if ep not in _his_dt:
-                            _his_dt[ep] = history_date
+                        _his_dt[ep] = history_date
             # 提取tmdb_info的集信息
             _eps_dt: dict = {i.episode_number: i.air_date for i in cal_info}
             # 处理为分钟
             delay_time = [
                 self.quantize_to_interval(
-                    (_dt - datetime.datetime.strptime(_eps_dt[_ep], "%Y-%m-%d")).total_seconds(), # 得出每集的延迟时间(秒)
+                    (_dt - datetime.datetime.strptime(_eps_dt[_ep], "%Y-%m-%d")).total_seconds() / 60, # 得出每集的延迟时间(分钟)
                     self._interval_minutes
                 ) # 转换为分钟并向下取整
                 for _ep, _dt in _his_dt.items()
@@ -1065,7 +1064,7 @@ class SubscribeCal(_PluginBase):
         """
         去余取整
         """
-        return time - time % (60 * interval_minutes)
+        return time - time % interval_minutes
 
     def save_keys(self, value: list[str]):
         self.save_data(key="__key__", value=value)
