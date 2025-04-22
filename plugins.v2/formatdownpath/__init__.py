@@ -308,7 +308,7 @@ class FormatDownPath(_PluginBase):
                                         'component': 'VSelect',
                                         'props': {
                                             'model': 'downloader',
-                                            'label': '选择下载器',
+                                            'label': '定时任务下载器',
                                             # 'chips': True,
                                             'multiple': False,
                                             'clearable': True,
