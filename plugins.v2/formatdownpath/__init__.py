@@ -29,7 +29,7 @@ from app.schemas.types import SystemConfigKey
 
 
 @dataclass
-class TorrentFile():
+class TorrentFile:
     """
     文件列表
     """
@@ -42,7 +42,7 @@ class TorrentFile():
 
 
 @dataclass
-class TorrentInfo():
+class TorrentInfo:
     """
     种子信息
     """
@@ -194,7 +194,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.2"
+    plugin_version = "1.1.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -816,10 +816,8 @@ class FormatDownPath(_PluginBase):
         """
         获取下载器
         """
-        service = self.downloader_helper.get_service(name=downloader)
-        if service:
-            self.service_info = service.config
-            is_qbittorrent = self.downloader_helper.is_downloader("qbittorrent", self.service_info)
+        if service := self.downloader_helper.get_service(name=downloader):
+            is_qbittorrent = self.downloader_helper.is_downloader("qbittorrent", service.config)
             if is_qbittorrent:
                 self.downloader: Downloader = QbittorrentDownloader(qbc=service.instance)
             else:
@@ -865,11 +863,11 @@ class FormatDownPath(_PluginBase):
     def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> bool:
         _torrent_hash = torrent_info.hash
         _torrent_name = torrent_info.name
-        _auto_tmm = torrent_info.auto_tmm
         _format_file_path = self._format_movie_path if media_info.type == MediaType.MOVIE else self._format_tv_path
+        need_update = False
         success = True
         # 关闭 Torrent自动管理
-        if success and _auto_tmm:
+        if success and torrent_info.auto_tmm:
             try:
                 logger.info(f"正在为种子 {_torrent_name} 关闭 Torrent自动管理")
                 self.downloader.set_auto_tmm(torrent_hash=_torrent_hash, enable=False)
@@ -877,7 +875,10 @@ class FormatDownPath(_PluginBase):
             except Exception as e:
                 logger.error(f"Torrent自动管理 关闭失败，种子：{_torrent_name}，hash: {_torrent_hash}，错误：{str(e)}")
                 success = False
-        if success:
+        # 查询数据库
+        downloadhis, downfiles = self.fetch_data(torrent_hash=_torrent_hash)
+        # 附加并格式化种子保存路径
+        if success and self._format_save_path:
             # 种子当前保存路径
             save_path = Path(torrent_info.save_path)
             # 种子新保存路径
@@ -899,14 +900,13 @@ class FormatDownPath(_PluginBase):
                 new_file_path = Path(*_new_parts[common_length:])
                 logger.info(f"存在 {common_length} 个公共路径，去除重复部分：{_original_parts[-common_length:]}")
             new_path = save_path / new_file_path
-            # 查询数据库
-            downloadhis, downfiles = self.fetch_data(torrent_hash=_torrent_hash)
             if new_path != save_path:
                 try:
                     new_path = str(new_path)
                     self.downloader.set_torrent_save_path(torrent_hash=_torrent_hash, location=new_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
+                    need_update = True
                     logger.info(f"更改种子保存路径成功：{torrent_info.save_path} ==> {new_path}")
                 except Exception as e:
                     logger.error(f"更改种子保存路径失败：{str(e)}")
@@ -943,6 +943,7 @@ class FormatDownPath(_PluginBase):
                     self.downloader.rename_file(torrent_hash=_torrent_hash, old_path=_file_name, new_path=new_file_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=_file_name, new_path=new_file_path)
+                    need_update = True
                     logger.info(f"种子文件重命名成功：{_file_name} ==> {new_file_path}")
                 except Exception as e:
                     logger.error(f"种子文件 {_file_name} 重命名失败：{str(e)}")
@@ -961,7 +962,8 @@ class FormatDownPath(_PluginBase):
                 logger.error(f"种子重命名失败：{str(e)}")
                 success = False
         # 更新数据库
-        self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
+        if need_update:
+            self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
     
     def update_path(self, downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
