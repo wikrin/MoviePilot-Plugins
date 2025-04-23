@@ -3,11 +3,12 @@
       "name": "路径名称格式化",
       "description": "根据自定义格式修改MP下载种子的保存路径、种子名称、种子文件名(实验功能)",
       "labels": "文件管理, 下载管理",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.1.5": "新增种子备份恢复, 可恢复记录中存在备份的已处理种子, 降低丢种风险",
         "1.1.4": "修复了在`不附加保存路径`且`重命名种子文件`时崩溃的问题",
         "1.1.1": "修复了由媒体类别引起的媒体信息识别错误",
         "1.1.0": "修改`种子标题重命名`预设, 仅适用v2.1.6+"

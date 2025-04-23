@@ -1,8 +1,9 @@
 # 基础库
 from abc import ABCMeta, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
@@ -10,6 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 
 # 项目库
+from app.core.config import settings
 from app.core.context import MediaInfo, TorrentInfo, Context
 from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
@@ -68,19 +70,30 @@ class TorrentInfo:
 class Downloader(metaclass=ABCMeta):
     @abstractmethod
     def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
+        """
+        设置种子自动管理(仅qBittorrent支持)
+        :param torrent_hash: 种子hash
+        :param enable: 是否开启自动管理
+        """
         pass
 
     @abstractmethod
-    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
+    def set_torrent_save_path(self, torrent_hash: str, location: str, move: bool = True) -> None:
         """
         设置种子保存路径
+        :param torrent_hash: 种子hash
+        :param location: 路径字符串(绝对路径)
+        :param move: 是否移动种子文件(仅transmission有效)
         """
         pass
 
     @abstractmethod
     def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
         """
-        重命名种子
+        重命名种子名称(仅qBittorrent支持)
+        :param torrent_hash: 种子hash
+        :param old_path: 原路径
+        :param new_torrent_name: 新种子名称
         """
         pass
 
@@ -88,6 +101,9 @@ class Downloader(metaclass=ABCMeta):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         """
         重命名种子文件
+        :param torrent_hash: 种子hash
+        :param old_path: 原路径
+        :param new_path: 新路径
         """
         pass
 
@@ -95,6 +111,7 @@ class Downloader(metaclass=ABCMeta):
     def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
         """
         获取种子信息
+        :param torrent_hash: 种子hash
         """
         pass
 
@@ -106,7 +123,7 @@ class QbittorrentDownloader(Downloader):
     def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
         self.qbc.torrents_set_auto_management(torrent_hashes=torrent_hash, enable=enable)
 
-    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
+    def set_torrent_save_path(self, torrent_hash: str, location: str, move: bool = True) -> None:
         self.qbc.torrents_set_location(torrent_hashes=torrent_hash, location=location)
     
     def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
@@ -152,8 +169,8 @@ class TransmissionDownloader(Downloader):
         """
         pass
 
-    def set_torrent_save_path(self, torrent_hash: str, location: str) -> None:
-        self.trc.move_torrent_data(ids=torrent_hash, location=location)
+    def set_torrent_save_path(self, torrent_hash: str, location: str, move: bool = True) -> None:
+        self.trc.move_torrent_data(ids=torrent_hash, location=location, move=move)
 
     def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
         """
@@ -181,6 +198,7 @@ class TransmissionDownloader(Downloader):
                             name=file.get('name'),
                             size=file.get('length'))
                         for file in torrent_info.fields.get('files')
+                        if '_____padding_file_' not in file.get('name') # 排除padding文件
                     ]
                 ))
         return torrents
@@ -194,7 +212,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -208,6 +226,7 @@ class FormatDownPath(_PluginBase):
 
     # 私有属性
     _scheduler = None
+    _lock = threading.Lock()
 
     # 配置属性
     _cron: str = ""
@@ -420,7 +439,7 @@ class FormatDownPath(_PluginBase):
                                                             'model': 'exclude_dirs',
                                                             'label': '排除目录',
                                                             'hint': '排除目录, 一行一个, 路径深度不能超过保存路径',
-                                                            'placeholder': r' 例如:\n /mnt/download \n E:\download',
+                                                            'placeholder': '例如:\n/mnt/download\nE:\\download',
                                                             'clearable': True,
                                                             'persistent-hint': True,
                                                         }
@@ -464,6 +483,27 @@ class FormatDownPath(_PluginBase):
                                                             'hint': '使用Jinja2语法, 所用变量与主程序相同',
                                                             'clearable': True,
                                                             'persistent-hint': True,
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        'component': 'VRow',
+                                        'content': [
+                                            {
+                                                'component': 'VCol',
+                                                'props': {
+                                                    'cols': 12,
+                                                },
+                                                'content': [
+                                                    {
+                                                        'component': 'VAlert',
+                                                        'props': {
+                                                            'type': 'warning',
+                                                            'variant': 'tonal',
+                                                            'text': '谨慎开启定时任务: 修改保存目录或种子文件都属于源目录操作, 已整理入库的文件会与整理记录失去关联!'
                                                         }
                                                     }
                                                 ]
@@ -632,13 +672,157 @@ class FormatDownPath(_PluginBase):
             logger.error(f"退出插件失败：{str(e)}")
 
     def get_api(self):
-        pass
+        return[{
+            "path": "/recover_from_history",
+            "endpoint": self.recover_from_history,
+            "methods": ["GET"],
+            "summary": "从记录中恢复",
+            "description": "根据记录恢复修改的种子",
+            }]
 
     def get_command(self):
         pass
 
     def get_page(self):
-        pass
+        processed = self.get_data(key="processed") or {}
+
+        def _build_card(torrent_info: dict):
+            hashstr = torrent_info.get('hash')
+            name = torrent_info.get('name')
+            files_count = len(torrent_info.get('files'))
+            save_path = torrent_info.get('save_path')
+            downloader = processed.get(hashstr)
+            return {
+                'component': 'VCard',
+                'props': {'elevation': '2', 'hover': True, 'style': 'transition: all 0.3s;'},
+                'content': [
+                    # 标题区域
+                    {
+                        'component': 'VCardTitle',
+                        'props': {'class': 'px-3 pt-2 pb-1'},
+                        'content': [
+                            {
+                                'component': 'div',
+                                'text': f'{name}',
+                                'props': {
+                                    'class': 'font-weight-bold',
+                                    'style': 'font-size: 1.1rem; white-space: normal; word-break: break-word; line-height: 1.3;'
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        'component': 'div',
+                        'props': {
+                            'class': 'd-flex align-center justify-space-between px-3 pb-2',
+                            'style': 'gap: 0.5rem;'
+                        },
+                        'content': [
+                            # 副标题
+                            {
+                                'component': 'div',
+                                'props': {'class': 'd-flex flex-column'},
+                                'content': [
+                                    {
+                                        'component': 'div',
+                                        'text': f"下载器: {downloader} 原保存路径: {save_path}",
+                                        'props': {'style': 'font-size: 0.9rem; word-break: break-all;'}
+                                    },
+                                    {
+                                        'component': 'div',
+                                        'text': f"文件数量: {files_count} | hash: {hashstr}",
+                                        'props': {'style': 'font-size: 0.9rem;'}
+                                    }
+                                ]
+                            },
+                            # 按钮
+                            {
+                                'component': 'VBtn',
+                                'props': {
+                                    'class': 'ml-auto',
+                                    'size': 'small',
+                                    'elevation': '20',
+                                    'rounded': 'xl',
+                                },
+                                'text': '恢复',
+                                'events': {
+                                    'click': {
+                                        'api': f'plugin/FormatDownPath/recover_from_history',
+                                        'method': 'get',
+                                        'params': {
+                                            'apikey': settings.API_TOKEN,
+                                            'downloader': downloader,
+                                            'torrent_hash': hashstr,
+                                        }
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        if processed:
+            plugin_data: list[PluginData] = self.get_data() or []
+            his_data = [data.value for data in plugin_data if data.key not in ['processed', 'pending'] and data.key in processed]
+            return [
+                {
+                    'component': 'VCol',
+                    'props': {
+                        'cols': 12,
+                    },
+                    'content': [
+                        {
+                            'component': 'VAlert',
+                            'props': {
+                                'type': 'warning',
+                                'variant': 'tonal',
+                                'text': '注意 插件重置后, 备份数据会被清除'
+                            }
+                        }
+                    ]
+                },
+                {
+                    'component': 'div',
+                    'props': {
+                        'class': 'grid grid-cols-1 gap-6',
+                    },
+                    'content': [_build_card(data) for data in his_data]
+                }
+            ]
+        else:
+            return [
+                {
+                    'component': 'div',
+                    'props': {
+                        'class': 'text-center',
+                    },
+                    'content': [
+                        {
+                            'component': 'div',
+                            'text': '没找到备份数据',
+                            'props': {
+                                'class': 'text-center',
+                            }
+                        }
+                    ]
+                },
+                {
+                    'component': 'VCol',
+                    'props': {
+                        'cols': 12,
+                    },
+                    'content': [
+                        {
+                            'component': 'VAlert',
+                            'props': {
+                                'type': 'warning',
+                                'variant': 'tonal',
+                                'text': '注意 插件重置后, 备份数据会被清除'
+                            }
+                        }
+                    ]
+                },
+            ]
 
     def get_state(self):
         return self._event_enabled or self._cron_enabled
@@ -658,17 +842,11 @@ class FormatDownPath(_PluginBase):
         if self._event_enabled:
             context: Context = event_data.get("context")
             if self.main(downloader=downloader, hash=hash, meta=context.meta_info, media_info=context.media_info):
-                # 获取已处理数据
-                processed: dict[str, str] = self.get_data(key="processed") or {}
-                # 添加到已处理数据库
-                processed[hash] = downloader
                 # 保存已处理数据
-                self.update_data(key="processed", value=processed)
+                self.update_data(key="processed", value={hash: downloader})
             else:
                 # 保存未完成数据
-                pending = self.get_data(key="pending") or {}
-                pending[hash] = downloader
-                self.update_data("pending", pending)
+                self.update_data(key="pending", value={hash: downloader})
 
     def cron_process_main(self):
         """
@@ -705,47 +883,68 @@ class FormatDownPath(_PluginBase):
                             if seed_data.key in _hashes:
                                 _mapping[_current_hash].extend(hashes)
                                 break
-                        # 不是辅种产生的种子, 作为源种子添加
-                        _mapping[seed_data.key] = hashes
+                        else: # 不是辅种产生的种子, 作为源种子添加
+                            _mapping[seed_data.key] = hashes
             return _mapping
 
-        # 从下载器获取种子信息
+        # 预处理集合
+        processed_hashes = set(processed.keys()) if processed else set()
+        pending_hashes = set(pending.keys()) if pending else set()
+        # 预处理下载器列表
+        valid_downloaders: List[Tuple[str, Downloader]] = []
         for d in self._downloader:
             self.set_downloader(d)
-            if self.downloader is None:
-                logger.warn(f"下载器: {d} 不存在或未启用")
+            if self.downloader is not None:
+                valid_downloaders.append((d, self.downloader))
+            else:
+                logger.warning(f"下载器: {d} 不存在或未启用")
+        if not valid_downloaders:
+            logger.warning("没有有效的下载器")
+            return
+
+        # 获取源种子hash表
+        assist_mapping = create_hash_mapping()
+        # 构建反向映射：种子哈希到源哈希
+        seed_to_source_hash = {}
+        if assist_mapping:
+            for source_hash, seeds in assist_mapping.items():
+                for seed in seeds:
+                    seed_to_source_hash[seed] = source_hash
+
+        # 遍历有效下载器并处理种子
+        for d_name, downloader in valid_downloaders:
+            torrents_info = [
+                torrent
+                for torrent in downloader.torrents_info()
+                if torrent.hash not in processed_hashes or torrent.hash in pending_hashes
+            ]
+            if not torrents_info:
+                logger.info(f"下载器 {d_name} 没有待处理的种子")
                 continue
-            torrents_info = [torrent_info for torrent_info in self.downloader.torrents_info() if torrent_info.hash not in processed or torrent_info.hash in pending]
-            if torrents_info:
-                # 先生成源种子hash表
-                assist_mapping = create_hash_mapping()
-                for torrent_info in torrents_info:
-                    _hash = ""
-                    if assist_mapping:
-                        for source_hash, seeds in assist_mapping.items():
-                            if torrent_info.hash in seeds:
-                                # 使用源下载种子识别
-                                _hash = source_hash
-                                break
-                    # 通过hash查询下载历史记录
-                    downloadhis = DownloadHistoryOper().get_by_hash(_hash or torrent_info.hash)
-                    # 执行处理
-                    if self.main(torrent_info=torrent_info, downloadhis=downloadhis):
-                        # 添加到已处理数据库
-                        processed[torrent_info.hash] = d
-                        # 本次处理成功计数
-                        _processed_num += 1
-                    else:
-                        # 添加到失败数据库
-                        _failures[torrent_info.hash] = d
+
+            # 设置为当前下载器
+            self.downloader = downloader
+            logger.info(f"下载器 {d_name} 待处理种子数量: {len(torrents_info)}")
+            for torrent_info in torrents_info:
+                _hash = seed_to_source_hash.get(torrent_info.hash, torrent_info.hash)
+                downloadhis = DownloadHistoryOper().get_by_hash(_hash or torrent_info.hash)
+                # 执行处理
+                if self.main(torrent_info=torrent_info, downloadhis=downloadhis):
+                    # 添加到已处理数据库
+                    processed[torrent_info.hash] = d_name
+                    # 本次处理成功计数
+                    _processed_num += 1
+                else:
+                    # 添加到失败数据库
+                    _failures[torrent_info.hash] = d_name
         # 更新数据库
         if _failures:
             self.update_data("pending", _failures)
             logger.info(f"失败 {len(_failures)} 个")
         if processed:
+            # 保存已处理数据库
             self.update_data("processed", processed)
             logger.info(f"成功 {_processed_num} 个, 合计 {len(processed)} 个种子已保存至历史")
-        # 保存已处理数据库
 
     def main(self, downloader: str = None, downloadhis: DownloadHistory = None,
              hash: str =None, torrent_info: TorrentInfo = None, 
@@ -759,106 +958,62 @@ class FormatDownPath(_PluginBase):
         :param media_info: 媒体信息
         :return: 处理结果
         """
-        success = True
-        if downloader:
-            # 设置下载器
-            self.set_downloader(downloader)
-        if self.downloader is None:
-            success = False
-            logger.warn(f"未连接下载器")
-        if success and not torrent_info:
-            if hash:
-                torrent_info = self.downloader.torrents_info(hash)
-                # 种子被手动删除或转移
-                if not torrent_info:
-                    success = False
-                    logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
-                    return True
-                # 取第一个种子
-                torrent_info = torrent_info[0]
-        # 保存目录排除
-        if success and self._exclude_dirs:
-            for exclude_dir in self._exclude_dirs.split("\n"):
-                if exclude_dir and exclude_dir in str(torrent_info.save_path):
-                    success = False
-                    logger.info(f"{torrent_info.name} 保存路径: {torrent_info.save_path} 命中排除目录：{exclude_dir}")
-                    return True
-        # 标签排除
-        if success and self._exclude_tags and \
-            (common_tags := {tag.strip() for tag in self._exclude_tags.split(",") if tag} & set(torrent_info.tags)):
-            success = False
-            logger.info(f"{torrent_info.tags} 命中排除标签：{common_tags}")
-            return True
-        if success and downloadhis:
-            # 使用历史记录的识别信息
-            meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
-            media_info = self.chain.recognize_media(meta=meta, mtype=MediaType(downloadhis.type),
-                                                    tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
-        if success and not meta:
-            logger.warn(f"未找到与之关联的下载种子 {torrent_info.name} 元数据识别可能不准确")
-            meta = MetaInfo(torrent_info.name)
-            if not meta:
-                logger.error(f"元数据获取失败，种子名称：{torrent_info.name}")
+        # 全程加锁
+        with self._lock:
+            success = True
+            if downloader:
+                # 设置下载器
+                self.set_downloader(downloader)
+            if self.downloader is None:
                 success = False
-        if success and not media_info:
-            media_info = self.chain.recognize_media(meta=meta)
-            if not media_info:
-                logger.error(f"识别媒体信息失败，种子名称：{torrent_info.name}")
+                logger.warn(f"未连接下载器")
+            if success and not torrent_info:
+                if hash:
+                    torrent_info = self.downloader.torrents_info(hash)
+                    # 种子被手动删除或转移
+                    if not torrent_info:
+                        success = False
+                        logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
+                        return True
+                    # 取第一个种子
+                    torrent_info = torrent_info[0]
+            # 保存目录排除
+            if success and self._exclude_dirs:
+                for exclude_dir in self._exclude_dirs.split("\n"):
+                    if exclude_dir and exclude_dir in str(torrent_info.save_path):
+                        success = False
+                        logger.info(f"{torrent_info.name} 保存路径: {torrent_info.save_path} 命中排除目录：{exclude_dir}")
+                        return True
+            # 标签排除
+            if success and self._exclude_tags and \
+                (common_tags := {tag.strip() for tag in self._exclude_tags.split(",") if tag} & set(torrent_info.tags)):
                 success = False
-        if success:
-            if self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info):
-                logger.info(f"种子 {torrent_info.name} 处理完成")
+                logger.info(f"{torrent_info.tags} 命中排除标签：{common_tags}")
                 return True
-        # 处理失败
-        return False
-
-    def set_downloader(self, downloader: str):
-        """
-        获取下载器
-        """
-        if service := self.downloader_helper.get_service(name=downloader):
-            is_qbittorrent = self.downloader_helper.is_downloader("qbittorrent", service.config)
-            if is_qbittorrent:
-                self.downloader: Downloader = QbittorrentDownloader(qbc=service.instance)
-            else:
-                self.downloader: Downloader = TransmissionDownloader(trc=service.instance)
-        else:
-            # 暂时设为None, 跳过
-            self.downloader = None
-
-    def update_data(self, key: str, value: dict = None):
-        """
-        更新插件数据
-        """
-        if not value:
-            return
-        plugin_data: dict = self.get_data(key=key)
-        if plugin_data:
-            plugin_data.update(value)
-            self.save_data(key=key, value=plugin_data)
-        else:
-            self.save_data(key=key, value=value)
-
-    @staticmethod
-    def format_path(
-        template_string: str,
-        meta: MetaBase,
-        mediainfo: MediaInfo,
-        file_ext: str = None,
-    ) -> Path:
-        """
-        根据媒体信息，返回Format字典
-        :param template_string: Jinja2 模板字符串
-        :param meta: 文件元数据
-        :param mediainfo: 识别的媒体信息
-        :param file_ext: 文件扩展名
-        """
-        def format_dict(meta: MetaBase, mediainfo: MediaInfo, file_ext: str = None) -> Dict[str, Any]:
-            return FileManagerModule._FileManagerModule__get_naming_dict(
-                meta=meta, mediainfo=mediainfo, file_ext=file_ext)
-
-        rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
-        return FileManagerModule.get_rename_path(template_string, rename_dict)
+            # 备份种子数据
+            self.save_data(key=torrent_info.hash, value=asdict(torrent_info))
+            if success and downloadhis:
+                # 使用历史记录的识别信息
+                meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
+                media_info = self.chain.recognize_media(meta=meta, mtype=MediaType(downloadhis.type),
+                                                        tmdbid=downloadhis.tmdbid, doubanid=downloadhis.doubanid)
+            if success and not meta:
+                logger.warn(f"未找到与之关联的下载种子 {torrent_info.name} 元数据识别可能不准确")
+                meta = MetaInfo(torrent_info.name)
+                if not meta:
+                    logger.error(f"元数据获取失败，种子名称：{torrent_info.name}")
+                    success = False
+            if success and not media_info:
+                media_info = self.chain.recognize_media(meta=meta)
+                if not media_info:
+                    logger.error(f"识别媒体信息失败，种子名称：{torrent_info.name}")
+                    success = False
+            if success:
+                if self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info):
+                    logger.info(f"种子 {torrent_info.name} 处理完成")
+                    return True
+            # 处理失败
+            return False
 
     def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> bool:
         _torrent_hash = torrent_info.hash
@@ -966,7 +1121,168 @@ class FormatDownPath(_PluginBase):
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
     
-    def update_path(self, downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
+    def recover_from_history(self, downloader: str, torrent_hash: str):
+        """
+        从处理历史中恢复
+        :param downloader: 下载器
+        :param torrent_hash: 种子哈希
+        """
+        #全程加锁
+        with self._lock:
+            if result := self.get_data(key=torrent_hash) or {}:
+                his_info = TorrentInfo(**{
+                        k: v if k != 'files' else [TorrentFile(**f) for f in v]
+                        for k, v in result.items()
+                    })
+                # 设置下载器
+                self.set_downloader(downloader)
+            else:
+                logger.warn(f"未找到种子 {torrent_hash} 的处理历史")
+                return False
+            if self.downloader is None:
+                logger.warn(f"下载器: {downloader} 不存在或未启用")
+                return False
+            if new_info := self.downloader.torrents_info(torrent_hash=his_info.hash):
+                new_info = new_info[0]
+                # 查询数据库
+                downloadhis, downfiles = self.fetch_data(torrent_hash=torrent_hash)
+            else:
+                logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}")
+                return False
+            if new_info == his_info:
+                self.delete_data(key="processed", torrent_hash=torrent_hash)
+                logger.info(f"与备份一致，跳过恢复, 记录已删除")
+                return True
+            success = True
+            need_update = False
+            # 恢复种子文件
+            if success and len(new_info.files) == len(his_info.files):
+                for n, o in zip(new_info.files, his_info.files):
+                    if n.name == o.name:
+                        continue
+                    try:
+                        self.downloader.rename_file(torrent_hash=new_info.hash, old_path=n.name, new_path=o.name)
+                        downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=n.name, new_path=o.name)
+                        need_update = True
+                        logger.info(f"种子文件恢复成功：{n.name} ==> {o.name}")
+                    except Exception as e:
+                        logger.error(f"种子文件：{n.name} 恢复失败: {str(e)}")
+                        success = False
+            # 恢复种子保存路径
+            if success and new_info.save_path != his_info.save_path:
+                try:
+                    self.downloader.set_torrent_save_path(torrent_hash=new_info.hash, location=his_info.save_path)
+                    downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=new_info.save_path, new_path=his_info.save_path)
+                    need_update = True
+                    logger.info(f"保存路径恢复成功：{new_info.save_path} ==> {his_info.save_path}")
+                except Exception as e:
+                    logger.error(f"保存路径恢复失败: {str(e)}")
+                    success = False
+            # 恢复种子名称
+            if success and new_info.name != his_info.name:
+                try:
+                    self.downloader.torrents_rename(torrent_hash=new_info.hash, old_path=new_info.name, new_torrent_name=his_info.name)
+                    logger.info(f"恢复种子名称成功：{new_info.name} ==> {his_info.name}")
+                except Exception as e:
+                    logger.error(f"种子名称：{new_info.name} 恢复失败: {str(e)}")
+                    success = False
+            
+            if need_update:
+                self.update_db(torrent_hash=torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
+                if success:
+                    # 删除处理记录
+                    self.delete_data(key="processed",torrent_hash=torrent_hash)
+                    logger.info(f"恢复完成, 记录已删除")
+                    return True
+                else:
+                    return False
+
+    def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
+        """
+        使用哈希查询数据库中的下载记录和文件记录
+        """
+        # 查询下载历史记录
+        download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
+        his = {download_history.id: {"path": download_history.path}} if download_history else {}
+        # 查询文件下载记录
+        download_files: List[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
+        downfiles = {file.id: {"fullpath": file.fullpath, "savepath": file.savepath, "filepath": file.filepath} for file in download_files} if download_files else {}
+        return his, downfiles
+
+    def set_downloader(self, downloader: str):
+        """
+        获取下载器
+        """
+        if service := self.downloader_helper.get_service(name=downloader):
+            if self.downloader_helper.is_downloader("qbittorrent", service.config):
+                if service.instance.qbc:
+                    self.downloader: Downloader = QbittorrentDownloader(qbc=service.instance)
+                    return
+            elif service.instance.trc:
+                self.downloader: Downloader = TransmissionDownloader(trc=service.instance)
+                return
+        # 暂时设为None, 跳过
+        self.downloader = None
+
+    def update_data(self, key: str, value: dict = None):
+        """
+        更新插件数据
+        """
+        if not value:
+            return
+        plugin_data: dict = self.get_data(key=key) or {}
+        if plugin_data:
+            plugin_data.update(value)
+            self.save_data(key=key, value=plugin_data)
+        else:
+            self.save_data(key=key, value=value)
+    
+    def delete_data(self, key: str, torrent_hash: str):
+        """
+        删除插件数据
+        :param key: 插件数据键
+        :param hash: 种子哈希
+        """
+        plugin_data: dict = self.get_data(key=key) or {}
+        if torrent_hash in plugin_data:
+            del plugin_data[torrent_hash]
+            self.save_data(key=key, value=plugin_data)
+
+    def update_db(self, torrent_hash: str, downloadhis: Optional[Dict[int, dict]], downfiles: Optional[Dict[int, dict]]):
+        """
+        更新数据库
+        """
+        db = self.plugindata._db
+        if downloadhis:
+            for id, data in downloadhis.items():
+                self.update_download_history_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
+
+        if downfiles:
+            for id, data in downfiles.items():
+                self.update_download_file_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
+    @staticmethod
+    def format_path(
+        template_string: str,
+        meta: MetaBase,
+        mediainfo: MediaInfo,
+        file_ext: str = None,
+    ) -> Path:
+        """
+        根据媒体信息，返回Format字典
+        :param template_string: Jinja2 模板字符串
+        :param meta: 文件元数据
+        :param mediainfo: 识别的媒体信息
+        :param file_ext: 文件扩展名
+        """
+        def format_dict(meta: MetaBase, mediainfo: MediaInfo, file_ext: str = None) -> Dict[str, Any]:
+            return FileManagerModule._FileManagerModule__get_naming_dict(
+                meta=meta, mediainfo=mediainfo, file_ext=file_ext)
+
+        rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
+        return FileManagerModule.get_rename_path(template_string, rename_dict)
+    
+    @staticmethod
+    def update_path(downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
 
         def safe_replace(d: dict, old: str, new: str):
             """
@@ -988,7 +1304,7 @@ class FormatDownPath(_PluginBase):
             for d in downfiles.values():
                 safe_replace(d, old_path, new_path)
         return downloadhis, downfiles
-    
+
     @staticmethod
     @db_update
     def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
@@ -1004,29 +1320,4 @@ class FormatDownPath(_PluginBase):
         db.query(DownloadHistory).filter(
             DownloadHistory.download_hash == torrent_hash \
                 and DownloadHistory.id == db_id).update(payload)
-        
-    def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
-        """
-        使用哈希查询数据库中的下载记录和文件记录
-        """
-        # 查询下载历史记录
-        download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
-        his = {download_history.id: {"path": download_history.path}} if download_history else {}
-        # 查询文件下载记录
-        download_files: List[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
-        downfiles = {file.id: {"fullpath": file.fullpath, "savepath": file.savepath, "filepath": file.filepath} for file in download_files} if download_files else {}
-        return his, downfiles
-
-    def update_db(self, torrent_hash: str, downloadhis: Optional[Dict[int, dict]], downfiles: Optional[Dict[int, dict]]):
-        """
-        更新数据库
-        """
-        db = self.plugindata._db
-        if downloadhis:
-            for id, data in downloadhis.items():
-                self.update_download_history_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
-
-        if downfiles:
-            for id, data in downfiles.items():
-                self.update_download_file_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
 
