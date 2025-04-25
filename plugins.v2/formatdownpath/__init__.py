@@ -836,17 +836,17 @@ class FormatDownPath(_PluginBase):
             and not event:
             return
         event_data = event.event_data or {}
-        hash = event_data.get("hash")
+        torrent_hash = event_data.get("hash")
         downloader = event_data.get("downloader")
         # 获取待处理数据
         if self._event_enabled:
             context: Context = event_data.get("context")
-            if self.main(downloader=downloader, hash=hash, meta=context.meta_info, media_info=context.media_info):
+            if self.main(downloader=downloader, torrent_hash=torrent_hash, meta=context.meta_info, media_info=context.media_info):
                 # 保存已处理数据
-                self.update_data(key="processed", value={hash: downloader})
+                self.update_data(key="processed", value={torrent_hash: downloader})
             else:
                 # 保存未完成数据
-                self.update_data(key="pending", value={hash: downloader})
+                self.update_data(key="pending", value={torrent_hash: downloader})
 
     def cron_process_main(self):
         """
@@ -947,12 +947,12 @@ class FormatDownPath(_PluginBase):
             logger.info(f"成功 {_processed_num} 个, 合计 {len(processed)} 个种子已保存至历史")
 
     def main(self, downloader: str = None, downloadhis: DownloadHistory = None,
-             hash: str =None, torrent_info: TorrentInfo = None, 
+             torrent_hash: str =None, torrent_info: TorrentInfo = None, 
              meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
         """
         处理单个种子
         :param downloader: 下载器名称
-        :param hash: 种子哈希
+        :param torrent_hash: 种子哈希
         :param torrent_info: 种子信息
         :param meta: 文件元数据
         :param media_info: 媒体信息
@@ -968,12 +968,12 @@ class FormatDownPath(_PluginBase):
                 success = False
                 logger.warn(f"未连接下载器")
             if success and not torrent_info:
-                if hash:
-                    torrent_info = self.downloader.torrents_info(hash)
+                if torrent_hash:
+                    torrent_info = self.downloader.torrents_info(torrent_hash)
                     # 种子被手动删除或转移
                     if not torrent_info:
                         success = False
-                        logger.warn(f"下载器 {downloader} 不存在该种子: {hash}")
+                        logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}")
                         return True
                     # 取第一个种子
                     torrent_info = torrent_info[0]
@@ -1147,11 +1147,12 @@ class FormatDownPath(_PluginBase):
                 # 查询数据库
                 downloadhis, downfiles = self.fetch_data(torrent_hash=torrent_hash)
             else:
-                logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}")
+                self.delete_data(key="processed", torrent_hash=torrent_hash)
+                logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}, 记录已删除")
                 return False
             if new_info == his_info:
                 self.delete_data(key="processed", torrent_hash=torrent_hash)
-                logger.info(f"与备份一致，跳过恢复, 记录已删除")
+                logger.warn(f"与备份一致，跳过恢复, 记录已删除")
                 return True
             success = True
             need_update = False
@@ -1241,8 +1242,11 @@ class FormatDownPath(_PluginBase):
         """
         删除插件数据
         :param key: 插件数据键
-        :param hash: 种子哈希
+        :param torrent_hash: 种子哈希
         """
+        # 删除种子备份数据
+        self.del_data(key=torrent_hash)
+        # 从完成记录中移除
         plugin_data: dict = self.get_data(key=key) or {}
         if torrent_hash in plugin_data:
             del plugin_data[torrent_hash]
