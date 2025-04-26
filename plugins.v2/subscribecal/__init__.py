@@ -202,7 +202,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.4"
+    plugin_version = "1.0.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -451,10 +451,10 @@ class SubscribeCal(_PluginBase):
                                         'props': {'cols': 'auto'},
                                         'content': [
                                             {
-                                                'component': 'VSwitch',
+                                                'component': 'VCheckbox',
                                                 'props': {
                                                     'model': f"_tmp.{sub.id}.enabled",
-                                                    'label': '启用',
+                                                    'label': '自定义',
                                                     'density': 'compact',
                                                     'hide-details': True,
                                                     'class': 'mr-2'
@@ -1013,7 +1013,7 @@ class SubscribeCal(_PluginBase):
                 f"\n统计分析:\n"
                 f"- 样本量: {n_samples}个\n"
                 f"- 中位时间差: {median_gap:.1f}分钟\n"
-                f"- 最佳区间方差: {min_stdev:.1f}\n"
+                f"- 最佳区间标准差: {min_stdev:.1f}\n"
                 f"- 使用方法: {method}\n"
                 f"- 密集区间: [{min(best_cluster):.1f}, {max(best_cluster):.1f}]\n"
                 f"- 初步结果: {result:.2f}分钟"
@@ -1042,6 +1042,23 @@ class SubscribeCal(_PluginBase):
                     episodes = range(int(eps[0][1:]), int(eps[-1][1:]) + 1)
                     for ep in episodes:
                         _his_dt[ep] = history_date
+            # 剔除订阅补全的历史记录
+            if _his_dt:
+                sorted_keys = sorted(_his_dt.keys(), reverse=True)
+                # 用于记录前一个值
+                prev_value = None
+
+                for key in sorted_keys:
+                    current_value = _his_dt[key]
+                    if prev_value is not None and  current_value > prev_value:
+                        # 当前值大于前一个值，则排除该键
+                        del _his_dt[key]
+                        logger.info(f"{sub.name} - 第 {key} 集 疑似订阅补全记录，已排除, 下载日期: {current_value}")
+                        continue
+
+                    # 更新记录值
+                    prev_value = current_value
+
             # 提取tmdb_info的集信息
             _eps_dt: dict = {i.episode_number: i.air_date for i in cal_info}
             # 处理为分钟
