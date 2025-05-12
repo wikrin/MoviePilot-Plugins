@@ -125,7 +125,7 @@ class QbittorrentDownloader(Downloader):
 
     def set_torrent_save_path(self, torrent_hash: str, location: str, move: bool = True) -> None:
         self.qbc.torrents_set_location(torrent_hashes=torrent_hash, location=location)
-    
+
     def torrents_rename(self, torrent_hash: str, old_path: str, new_torrent_name: str) -> None:
         self.qbc.torrents_rename(torrent_hash=torrent_hash, new_torrent_name=new_torrent_name)
 
@@ -212,7 +212,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.5"
+    plugin_version = "1.1.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -269,6 +269,14 @@ class FormatDownPath(_PluginBase):
                 "format_tv_path",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, Optional[str]]:
+        """
+        获取插件渲染模式
+        :return: 1、渲染模式，支持：vue/vuetify，默认vuetify；2、vue模式下编译后文件的相对路径，默认为`dist/assets`，vuetify模式下为None
+        """
+        return "vue", "dist/assets"
 
     def get_form(self):
         _downloaders = [{"title": d.get("name"), "value": [d.get("name")]} for d in SystemConfigOper().get(SystemConfigKey.Downloaders) if d.get("enabled")]
@@ -676,15 +684,32 @@ class FormatDownPath(_PluginBase):
             "path": "/recover_from_history",
             "endpoint": self.recover_from_history,
             "methods": ["GET"],
+            "auth": "bear",
             "summary": "从记录中恢复",
             "description": "根据记录恢复修改的种子",
+            },
+            {
+                "path": "/processed_data",
+                "endpoint": self.get_processed_data,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取种子记录",
+                "description": "获取已处理成功的种子记录",
+            },
+            {
+                "path": "/torrent_data",
+                "endpoint": self.get_torrent_data,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "获取种子信息",
+                "description": "根据种子hash获取种子信息",
             }]
 
     def get_command(self):
         pass
 
     def get_page(self):
-        processed = self.get_data(key="processed") or {}
+        processed = self.get_processed_data()
 
         def _build_card(torrent_info: dict):
             hashstr = torrent_info.get('hash')
@@ -1120,7 +1145,7 @@ class FormatDownPath(_PluginBase):
         if need_update:
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
-    
+
     def recover_from_history(self, downloader: str, torrent_hash: str):
         """
         从处理历史中恢复
@@ -1187,7 +1212,7 @@ class FormatDownPath(_PluginBase):
                 except Exception as e:
                     logger.error(f"种子名称：{new_info.name} 恢复失败: {str(e)}")
                     success = False
-            
+
             if need_update:
                 self.update_db(torrent_hash=torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
                 if success:
@@ -1197,6 +1222,21 @@ class FormatDownPath(_PluginBase):
                     return True
                 else:
                     return False
+
+    def get_processed_data(self) -> dict[str, str]:
+        """
+        获取已处理的种子哈希列表
+        """
+        return self.get_data(key="processed") or {}
+
+    def get_torrent_data(self, torrent_hash: str) -> Optional[dict[str, Any]]:
+        """
+        获取种子数据
+        """
+        if data := self.get_data(key=torrent_hash):
+            return {"name": data.get('name'), "files_count": len(data.get('files')), "save_path": data.get('save_path')}
+        else:
+            return None
 
     def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
         """
@@ -1237,7 +1277,7 @@ class FormatDownPath(_PluginBase):
             self.save_data(key=key, value=plugin_data)
         else:
             self.save_data(key=key, value=value)
-    
+
     def delete_data(self, key: str, torrent_hash: str):
         """
         删除插件数据
@@ -1284,7 +1324,7 @@ class FormatDownPath(_PluginBase):
 
         rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
         return FileManagerModule.get_rename_path(template_string, rename_dict)
-    
+
     @staticmethod
     def update_path(downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
 
@@ -1316,7 +1356,7 @@ class FormatDownPath(_PluginBase):
         db.query(DownloadFiles).filter(
             DownloadFiles.download_hash == torrent_hash \
                 and DownloadFiles.id == db_id).update(payload)
-    
+
     @staticmethod
     @db_update
     def update_download_history_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
