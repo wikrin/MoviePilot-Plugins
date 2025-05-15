@@ -915,8 +915,8 @@ class SubscribeCal(_PluginBase):
             cal.dtend=dtend
             event_data[str(epinfo.id)] = cal
         # 保存事件数据
-        logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
+        logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         return _key
 
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
