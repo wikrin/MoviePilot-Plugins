@@ -31,11 +31,12 @@
       "name": "订阅日历",
       "description": "根据订阅生成日历, 以供导入至设备日历中",
       "labels": "工具, 订阅",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.0.6": "修复了日历数据序列化异常的问题",
         "1.0.5": "降低订阅补全导致的时间误差",
         "1.0.4": "修复时间单位计算错误",
         "1.0.3": "新增自定义订阅播出时间、日历名称、分钟取整等设置, 更换统计时间计算逻辑"

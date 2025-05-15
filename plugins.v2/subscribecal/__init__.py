@@ -109,7 +109,7 @@ class CalendarEvent(BaseModel):
         if name != 'last_modified':
             super().__setattr__('last_modified', self._get_utc_time())
 
-    
+
     def _created_to_ics(self) -> str:
         """创建时间"""
         if self.created:
@@ -122,34 +122,34 @@ class CalendarEvent(BaseModel):
     def _dtend_to_ics(self) -> str:
         if self.dtend:
             return f"DTEND;VALUE=DATE-TIME:{self.dtend}"
-        
+
     def _summary_to_ics(self) -> str:
         """标题"""
         if self.summary:
             return f"SUMMARY:{self.summary}"
-        
+
     def _description_to_ics(self) -> str:
         """备注"""
         if self.description:
             return f"DESCRIPTION:{self.description}"
-    
+
     def _location_to_ics(self) -> str:
         """地点"""
         if self.location:
             return f"LOCATION:{self.location}"
-        
+
     def _uid_to_ics(self) -> str:
         """唯一标识"""
         return f"UID:{self.uid or uuid.uuid4()}"
-        
+
     def _transp_to_ics(self) -> str:
         """类型"""
         return f"TRANSP:{self.transp or 'OPAQUE'}"
-    
+
     def _sequence_to_ics(self) -> str:
         """序号"""
         return f"SEQUENCE:{self.sequence or 0}"
-    
+
     def _status_to_ics(self) -> str:
         """状态"""
         return f"STATUS:{self.status or 'CONFIRMED'}"
@@ -157,7 +157,7 @@ class CalendarEvent(BaseModel):
     def _last_modified_to_ics(self) -> str:
         """最后修改时间"""
         return f"LAST-MODIFIED:{self.last_modified or self._get_utc_time()}"
-    
+
     def ics_header(self, calname: str = "追剧日历") -> str:
         return (
         "\nBEGIN:VCALENDAR\n"
@@ -202,7 +202,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.5"
+    plugin_version = "1.0.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -282,7 +282,7 @@ class SubscribeCal(_PluginBase):
                 "interval_minutes": self._interval_minutes,
             })
         self.update_config(config)
-    
+
     def _save_tmp_config(self, config: dict[str, Any]):
         if not config:
             return config
@@ -683,7 +683,7 @@ class SubscribeCal(_PluginBase):
                                             {
                                                 'component': 'div',
                                                 'props': {
-                                                    'innerHTML': (f'ICS文件可<a href="/api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>' 
+                                                    'innerHTML': (f'ICS文件可<a href="/api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>'
                                                                 if self._enabled else '插件未启用')
                                                 }
                                             }
@@ -807,7 +807,7 @@ class SubscribeCal(_PluginBase):
         _events = self.get_events(self.keys)
         ics_file = StringIO(self.generate_ics_content(_events))
         return responses.StreamingResponse(ics_file, media_type="text/calendar", headers={"Content-Disposition": "attachment; filename=calendar.ics"})
- 
+
     def full_update(self, cache: bool = False):
         """
         日历全量更新
@@ -913,10 +913,10 @@ class SubscribeCal(_PluginBase):
             cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
             cal.dtend=dtend
-            event_data[str(epinfo.id)] = cal.dict()
+            event_data[str(epinfo.id)] = cal
         # 保存事件数据
         logger.info(f"{mediainfo.title_year} 日历事件处理完成")
-        self.save_data(key=_key, value=event_data)
+        self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
         return _key
 
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
