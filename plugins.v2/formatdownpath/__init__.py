@@ -66,7 +66,6 @@ class TorrentInfo:
     files: List[TorrentFile] = field(default_factory=list)
 
 
-
 class Downloader(metaclass=ABCMeta):
     @abstractmethod
     def set_auto_tmm(self, torrent_hash: str, enable: bool) -> None:
@@ -212,7 +211,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -1152,7 +1151,7 @@ class FormatDownPath(_PluginBase):
         :param downloader: 下载器
         :param torrent_hash: 种子哈希
         """
-        #全程加锁
+        # 全程加锁
         with self._lock:
             if result := self.get_data(key=torrent_hash) or {}:
                 his_info = TorrentInfo(**{
@@ -1318,12 +1317,22 @@ class FormatDownPath(_PluginBase):
         :param mediainfo: 识别的媒体信息
         :param file_ext: 文件扩展名
         """
-        def format_dict(meta: MetaBase, mediainfo: MediaInfo, file_ext: str = None) -> Dict[str, Any]:
-            return FileManagerModule._FileManagerModule__get_naming_dict(
-                meta=meta, mediainfo=mediainfo, file_ext=file_ext)
+        try:
+            from app.modules.filemanager.transhandler import TransHandler
 
-        rename_dict = format_dict(meta=meta, mediainfo=mediainfo, file_ext=file_ext)
-        return FileManagerModule.get_rename_path(template_string, rename_dict)
+            return TransHandler().get_rename_path(
+                template_string=template_string,
+                rename_dict=TransHandler().get_naming_dict(
+                    meta=meta, mediainfo=mediainfo, file_ext=file_ext
+                ),
+            )
+        except ImportError as e:
+            return FileManagerModule.get_rename_path(
+                template_string,
+                FileManagerModule._FileManagerModule__get_naming_dict(
+                    meta=meta, mediainfo=mediainfo, file_ext=file_ext
+                ),
+            )
 
     @staticmethod
     def update_path(downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
