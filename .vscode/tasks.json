@@ -1,0 +1,73 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Plugin: Build and cleanup-Tasks",
+      "type": "shell",
+      "command": "${input:terminate}",
+      "dependsOn": [
+        "Build"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Dev",
+      "type": "shell",
+      "command": "./vscode-task-runner.sh",
+      "args": [
+        "dev"
+      ],
+      "options": {
+        "env": {
+          "PLUGIN_PATH": "${fileDirname}"
+        }
+      },
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "./vscode-task-runner.sh",
+      "args": [
+        "build"
+      ],
+      "options": {
+        "env": {
+          "PLUGIN_PATH": "${fileDirname}"
+        }
+      },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^Run mode:",
+          "endsPattern": "^Build artifacts moved to:"
+        }
+      }
+    },
+    {
+      "label": "cleanup-Tasks",
+      "type": "shell",
+      "command": "${input:terminate}",
+      "isBackground": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "terminate",
+      "type": "command",
+      "command": "workbench.action.tasks.terminate",
+      "args": "terminateAll"
+    },
+  ]
+}
