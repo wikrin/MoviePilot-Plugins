@@ -42,5 +42,17 @@
         "1.0.4": "修复时间单位计算错误",
         "1.0.3": "新增自定义订阅播出时间、日历名称、分钟取整等设置, 更换统计时间计算逻辑"
       }
+    },
+    "NotifyExt": {
+      "name": "消息通知扩展",
+      "description": "拦截设定时间内重复消息，支持按媒体类型/类别进行消息分发",
+      "labels": "工具, 消息通知",
+      "version": "1.0.0",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
+      "author": "Attente",
+      "level": 1,
+      "history": {
+        "1.0.0": "init"
+      }
     }
   }
