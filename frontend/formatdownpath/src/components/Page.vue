@@ -11,7 +11,7 @@ interface TorrentItem {
 
 const props = defineProps({
   api: {
-    type: [Object, Function],
+    type: Object,
     required: true,
   },
   initialConfig: {
@@ -142,9 +142,8 @@ const loadData = async () => {
 const recoverFromHistory = async (hash: string, downloader: string) => {
   try {
     loading.value = true
-    const isSuccess: boolean = await props.api.get(
-      `plugin/FormatDownPath/recover_from_history?downloader=${downloader}&torrent_hash=${hash}`
-    )
+    const isSuccess: boolean = await props.api.post(
+      `plugin/FormatDownPath/recover_from_history`, {downloader: downloader, torrent_hash: hash})
     if (isSuccess) {
       showNotification('恢复成功')
       // 本地状态更新

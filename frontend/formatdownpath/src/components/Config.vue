@@ -388,7 +388,7 @@ onMounted(() => {
       </v-card-text>
 
       <v-card-actions class="px-2 py-1">
-        <v-btn color="info" @click="emit('switch')" prepend-icon="mdi-view-dashboard" variant="text" size="small">状态页</v-btn>
+        <v-btn color="info" @click="emit('switch')" prepend-icon="mdi-view-dashboard" variant="text" size="small">数据页</v-btn>
         <v-spacer></v-spacer>
         <v-btn color="secondary" variant="text" @click="resetForm" prepend-icon="mdi-restore" size="small">恢复默认</v-btn>
         <v-btn color="primary" :disabled="!isFormValid || saving" @click="saveConfig" :loading="saving" prepend-icon="mdi-content-save" variant="text" size="small">保存配置</v-btn>

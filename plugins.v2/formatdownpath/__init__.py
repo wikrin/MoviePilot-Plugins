@@ -11,7 +11,6 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 
 # 项目库
-from app.core.config import settings
 from app.core.context import MediaInfo, TorrentInfo, Context
 from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
@@ -19,7 +18,6 @@ from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
 from app.db import db_update
 from app.db.models.plugindata import PluginData
-from app.db.systemconfig_oper import SystemConfigOper
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
 from app.modules.filemanager import FileManagerModule
@@ -211,7 +209,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.7"
+    plugin_version = "1.1.8"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -278,379 +276,7 @@ class FormatDownPath(_PluginBase):
         return "vue", "dist/assets"
 
     def get_form(self):
-        _downloaders = [{"title": d.get("name"), "value": [d.get("name")]} for d in SystemConfigOper().get(SystemConfigKey.Downloaders) if d.get("enabled")]
-        return [
-            {
-                'component': 'VForm',
-                'content': [
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'event_enabled',
-                                            'label': '启用事件监听',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'cron_enabled',
-                                            'label': '启用定时任务',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '执行周期',
-                                            'placeholder': '0 8 * * *',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'downloader',
-                                            'label': '定时任务下载器',
-                                            # 'chips': True,
-                                            'multiple': False,
-                                            'clearable': True,
-                                            'items': _downloaders,
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VTabs',
-                        'props': {
-                            'model': '_tabs',
-                            'style': {
-                                'margin-top': '16px',
-                                'margin-bottom': '16px',
-                            },
-                            'stacked': False,
-                            'fixed-tabs': True
-                        },
-                        'content': [
-                            {
-                                'component': 'VTab',
-                                'props': {
-                                    'value': 'basic_tab'
-                                },
-                                'text': '基本设置'
-                            },
-                            {
-                                'component': 'VTab',
-                                'props': {
-                                    'value': 'critical_tab'
-                                },
-                                'text': '实验性功能'
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VWindow',
-                        'props': {
-                            'model': '_tabs'
-                        },
-                        'content': [
-                            {
-                                'component': 'VWindowItem',
-                                'props': {
-                                    'value': 'basic_tab'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 7,
-                                                    'style': {
-                                                        'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
-                                                        },
-                                                    },
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextField',
-                                                        'props': {
-                                                            'model': 'format_save_path',
-                                                            'label': '保存路径格式',
-                                                            'hint': '使用Jinja2语法, 不会覆盖原保存路径, 仅追加. 留空不修改',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            },
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 5,
-                                                    'style': {
-                                                        'margin-top': '12px'    # 设置上边距, 确保`label`不被遮挡
-                                                        },
-                                                    },
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextField',
-                                                        'props': {
-                                                            'model': 'exclude_tags',
-                                                            'label': '排除标签',
-                                                            'placeholder': '注意: 空白字符会排除所有未设置标签的种子',
-                                                            'hint': '多个标签用, 分割',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 12},
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextarea',
-                                                        'props': {
-                                                            'rows': 3,
-                                                            'auto-grow': True,
-                                                            'model': 'exclude_dirs',
-                                                            'label': '排除目录',
-                                                            'hint': '排除目录, 一行一个, 路径深度不能超过保存路径',
-                                                            'placeholder': '例如:\n/mnt/download\nE:\\download',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 8, 'md': 4},
-                                                'content': [
-                                                    {
-                                                        'component': 'VSwitch',
-                                                        'props': {
-                                                            'model': 'rename_torrent',
-                                                            'label': '种子重命名',
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 12},
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextarea',
-                                                        'props': {
-                                                            'rows': 2,
-                                                            'auto-grow': True,
-                                                            'model': 'format_torrent_name',
-                                                            'label': '种子标题重命名格式',
-                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {
-                                                    'cols': 12,
-                                                },
-                                                'content': [
-                                                    {
-                                                        'component': 'VAlert',
-                                                        'props': {
-                                                            'type': 'warning',
-                                                            'variant': 'tonal',
-                                                            'text': '谨慎开启定时任务: 修改保存目录或种子文件都属于源目录操作, 已整理入库的文件会与整理记录失去关联!'
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {
-                                                    'cols': 12,
-                                                },
-                                                'content': [
-                                                    {
-                                                        'component': 'VAlert',
-                                                        'props': {
-                                                            'type': 'info',
-                                                            'variant': 'tonal',
-                                                            'text': '种子重命名: 重命名种子在下载器显示的名称,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持'
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VWindowItem',
-                                'props': {
-                                    'value': 'critical_tab'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 8, 'md': 4},
-                                                'content': [
-                                                    {
-                                                        'component': 'VSwitch',
-                                                        'props': {
-                                                            'model': 'rename_file',
-                                                            'label': '种子文件重命名(实验功能)',
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 12},
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextarea',
-                                                        'props': {
-                                                            'rows': 3,
-                                                            'auto-grow': True,
-                                                            'model': 'format_movie_path',
-                                                            'label': '电影文件重命名格式',
-                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {'cols': 12},
-                                                'content': [
-                                                    {
-                                                        'component': 'VTextarea',
-                                                        'props': {
-                                                            'rows': 3,
-                                                            'auto-grow': True,
-                                                            'model': 'format_tv_path',
-                                                            'label': '电视剧文件重命名格式',
-                                                            'hint': '使用Jinja2语法, 所用变量与主程序相同',
-                                                            'clearable': True,
-                                                            'persistent-hint': True,
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VRow',
-                                        'content': [
-                                            {
-                                                'component': 'VCol',
-                                                'props': {
-                                                    'cols': 12,
-                                                },
-                                                'content': [
-                                                    {
-                                                        'component': 'VAlert',
-                                                        'props': {
-                                                            'type': 'warning',
-                                                            'variant': 'tonal',
-                                                            'text': '谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度'
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
-        ], {
-            "cron_enabled": False,
-            "downloader": [],
-            "exclude_dirs": "",
-            "exclude_tags": "",
-            "cron": "",
-            "event_enabled": False,
-            "rename_torrent": False,
-            "rename_file": False,
-            "format_torrent_name": "{{ title }}{% if year %} ({{ year }}){% endif %}{% if season_episode %} - {{season_episode}}{% endif %}",
-            "format_save_path": "{{title}}{% if year %} ({{year}}){% endif %}",
-            "format_movie_path": "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
-            "format_tv_path": "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
-        }
+        return [], {}
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -682,7 +308,7 @@ class FormatDownPath(_PluginBase):
         return[{
             "path": "/recover_from_history",
             "endpoint": self.recover_from_history,
-            "methods": ["GET"],
+            "methods": ["POST"],
             "auth": "bear",
             "summary": "从记录中恢复",
             "description": "根据记录恢复修改的种子",
@@ -708,145 +334,7 @@ class FormatDownPath(_PluginBase):
         pass
 
     def get_page(self):
-        processed = self.get_processed_data()
-
-        def _build_card(torrent_info: dict):
-            hashstr = torrent_info.get('hash')
-            name = torrent_info.get('name')
-            files_count = len(torrent_info.get('files'))
-            save_path = torrent_info.get('save_path')
-            downloader = processed.get(hashstr)
-            return {
-                'component': 'VCard',
-                'props': {'elevation': '2', 'hover': True, 'style': 'transition: all 0.3s;'},
-                'content': [
-                    # 标题区域
-                    {
-                        'component': 'VCardTitle',
-                        'props': {'class': 'px-3 pt-2 pb-1'},
-                        'content': [
-                            {
-                                'component': 'div',
-                                'text': f'{name}',
-                                'props': {
-                                    'class': 'font-weight-bold',
-                                    'style': 'font-size: 1.1rem; white-space: normal; word-break: break-word; line-height: 1.3;'
-                                }
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'div',
-                        'props': {
-                            'class': 'd-flex align-center justify-space-between px-3 pb-2',
-                            'style': 'gap: 0.5rem;'
-                        },
-                        'content': [
-                            # 副标题
-                            {
-                                'component': 'div',
-                                'props': {'class': 'd-flex flex-column'},
-                                'content': [
-                                    {
-                                        'component': 'div',
-                                        'text': f"下载器: {downloader} 原保存路径: {save_path}",
-                                        'props': {'style': 'font-size: 0.9rem; word-break: break-all;'}
-                                    },
-                                    {
-                                        'component': 'div',
-                                        'text': f"文件数量: {files_count} | hash: {hashstr}",
-                                        'props': {'style': 'font-size: 0.9rem;'}
-                                    }
-                                ]
-                            },
-                            # 按钮
-                            {
-                                'component': 'VBtn',
-                                'props': {
-                                    'class': 'ml-auto',
-                                    'size': 'small',
-                                    'elevation': '20',
-                                    'rounded': 'xl',
-                                },
-                                'text': '恢复',
-                                'events': {
-                                    'click': {
-                                        'api': f'plugin/FormatDownPath/recover_from_history',
-                                        'method': 'get',
-                                        'params': {
-                                            'apikey': settings.API_TOKEN,
-                                            'downloader': downloader,
-                                            'torrent_hash': hashstr,
-                                        }
-                                    }
-                                }
-                            }
-                        ]
-                    }
-                ]
-            }
-        if processed:
-            plugin_data: list[PluginData] = self.get_data() or []
-            his_data = [data.value for data in plugin_data if data.key not in ['processed', 'pending'] and data.key in processed]
-            return [
-                {
-                    'component': 'VCol',
-                    'props': {
-                        'cols': 12,
-                    },
-                    'content': [
-                        {
-                            'component': 'VAlert',
-                            'props': {
-                                'type': 'warning',
-                                'variant': 'tonal',
-                                'text': '注意 插件重置后, 备份数据会被清除'
-                            }
-                        }
-                    ]
-                },
-                {
-                    'component': 'div',
-                    'props': {
-                        'class': 'grid grid-cols-1 gap-6',
-                    },
-                    'content': [_build_card(data) for data in his_data]
-                }
-            ]
-        else:
-            return [
-                {
-                    'component': 'div',
-                    'props': {
-                        'class': 'text-center',
-                    },
-                    'content': [
-                        {
-                            'component': 'div',
-                            'text': '没找到备份数据',
-                            'props': {
-                                'class': 'text-center',
-                            }
-                        }
-                    ]
-                },
-                {
-                    'component': 'VCol',
-                    'props': {
-                        'cols': 12,
-                    },
-                    'content': [
-                        {
-                            'component': 'VAlert',
-                            'props': {
-                                'type': 'warning',
-                                'variant': 'tonal',
-                                'text': '注意 插件重置后, 备份数据会被清除'
-                            }
-                        }
-                    ]
-                },
-            ]
+        pass
 
     def get_state(self):
         return self._event_enabled or self._cron_enabled
@@ -1145,7 +633,7 @@ class FormatDownPath(_PluginBase):
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
 
-    def recover_from_history(self, downloader: str, torrent_hash: str):
+    def recover_from_history(self, request: Dict[str, str]):
         """
         从处理历史中恢复
         :param downloader: 下载器
@@ -1153,6 +641,8 @@ class FormatDownPath(_PluginBase):
         """
         # 全程加锁
         with self._lock:
+            torrent_hash = request.get("torrent_hash")
+            downloader = request.get("downloader")
             if result := self.get_data(key=torrent_hash) or {}:
                 his_info = TorrentInfo(**{
                         k: v if k != 'files' else [TorrentFile(**f) for f in v]
