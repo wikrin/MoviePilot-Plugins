@@ -6,7 +6,7 @@
       "type": "shell",
       "command": "${input:terminate}",
       "dependsOn": [
-        "Build"
+        "Plugin-Frontebd Build"
       ],
       "dependsOrder": "sequence",
       "group": {
@@ -15,7 +15,7 @@
       }
     },
     {
-      "label": "Dev",
+      "label": "Plugin-Frontebd Dev",
       "type": "shell",
       "command": "./vscode-task-runner.sh",
       "args": [
@@ -32,7 +32,7 @@
       }
     },
     {
-      "label": "Build",
+      "label": "Plugin-Frontebd Build",
       "type": "shell",
       "command": "./vscode-task-runner.sh",
       "args": [
@@ -67,7 +67,7 @@
       "id": "terminate",
       "type": "command",
       "command": "workbench.action.tasks.terminate",
-      "args": "terminateAll"
+      "args": "Plugin-Frontebd Build"
     },
   ]
 }
