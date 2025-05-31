@@ -3,7 +3,7 @@ import { ref, reactive, onMounted, computed } from 'vue';
 import { v4 as uuidv4 } from 'uuid';
 import RuleCard from './cards/RuleCard.vue'
 import TemplateCard from './cards/TemplateCard.vue'
-import { type NotificationRule, templateConf, NotificationConf } from '../types';
+import type { NotificationRule, templateConf, NotificationConf } from '../types';
 
 
 const props = defineProps({
@@ -450,6 +450,8 @@ onMounted(() => {
           </v-card>
         </v-form>
       </v-card-text>
+
+      <!-- 确认框 -->
       <v-dialog v-model="showDialog" max-width="400">
         <v-card>
         <v-card-title class="text-h6">确认操作</v-card-title>
@@ -462,8 +464,7 @@ onMounted(() => {
         </v-card>
       </v-dialog>
 
-
-      <!-- 通知弹窗 -->
+    <!-- 通知弹窗 -->
     <v-snackbar v-model="snackbar.show" :color="snackbar.color" :timeout="snackbar.timeout">
       {{ snackbar.text }}
       <template v-slot:actions>

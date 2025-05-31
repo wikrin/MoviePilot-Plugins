@@ -3,7 +3,7 @@ import { ref, reactive, onMounted } from 'vue';
 
 const props = defineProps({
   api: {
-    type: Object as any,
+    type: Object,
     required: true,
   },
   initialConfig: {

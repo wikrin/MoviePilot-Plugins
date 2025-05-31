@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { type NotificationRule } from '../../types'
+import type { NotificationRule } from '../../types'
 
 const props = defineProps({
   rule: {
