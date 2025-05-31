@@ -194,6 +194,38 @@ class CalendarEvent(BaseModel):
         return "\n".join(ics_lines)
 
 
+class TimeLineItem(BaseModel):
+    """时间轴条目"""
+    # 订阅表ID
+    id: int
+    # 起始时间
+    dtstart: Optional[str]
+    # 结束时间
+    dtend: Optional[str]
+    # 标题
+    summary: Optional[str]
+    # 描述
+    description: Optional[str]
+    # 地点
+    location: Optional[str]
+    # 唯一标识
+    uid: Optional[str]
+    # 年份
+    year: Optional[str]
+    # 类型
+    type: Optional[str]
+    # 季号
+    season: Optional[int]
+    # 海报
+    poster: Optional[str]
+    # 背景图
+    backdrop: Optional[str]
+    # 评分，float
+    vote: Optional[float]
+    # 状态：N-新建 R-订阅中 P-待定 S-暂停
+    state: Optional[str]
+
+
 class SubscribeCal(_PluginBase):
     # 插件名称
     plugin_name = "订阅日历"
@@ -202,7 +234,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.6"
+    plugin_version = "1.0.7"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -232,10 +264,7 @@ class SubscribeCal(_PluginBase):
 
         # 停止现有任务
         self.stop_service()
-        # 保存配置
-        self._save_tmp_config(config)
         self.load_config(config)
-
 
         if self._onlyonce:
             self.schedule_once()
@@ -272,468 +301,23 @@ class SubscribeCal(_PluginBase):
 
     def __update_config(self):
         """更新设置"""
-        config = self.get_config() or {}
-        config.update({
+        self.update_config(
+            {
                 "enabled": self._enabled,
                 "onlyonce": self._onlyonce,
                 "cron": self._cron,
                 "calc_time": self._calc_time,
                 "calname": self._calname,
                 "interval_minutes": self._interval_minutes,
-            })
-        self.update_config(config)
+            }
+        )
 
-    def _save_tmp_config(self, config: dict[str, Any]):
-        if not config:
-            return config
-        try:
-            user_interval = {k: v for k, v in config.items() if k.startswith("_tmp.")}
-            _items: dict[str, dict] = {}
-            for key, value in user_interval.items():
-                # 使用. 分割
-                _, _subid, _key = key.split(".")
-                if _subid not in _items:
-                    _items[_subid] = {}
-                _items[_subid][_key] = value
-            if not _items:
-                return
-            _data = {subid: datetime.timedelta(
-                days=int(interval.get("days", 0)),
-                hours=int(interval.get("hours", 0)),
-                minutes=int(interval.get("minutes", 0)),
-            ).total_seconds() / 60 for subid, interval in _items.items() if interval.get("enabled")}
-            # 保存插件数据
-            self.save_data(key="UserInterval", value=_data)
-            logger.info("设定延迟已保存")
-        except Exception as e:
-            logger.error(f"保存设定延迟失败: {e}")
-
-    def _del_tmp_config(self, ids: list[str], user_interval: dict[str, Any]):
-        try:
-            pm = PluginManager()
-            config: dict[str, Any] = pm.get_plugin_config(self.__class__.__name__)
-            for _key in list(config.keys()):
-                if not _key.startswith("_tmp."):
-                    continue
-                # 使用. 分割
-                _subid = _key.split(".")[1]
-                if _subid in ids:
-                    del config[_key]
-                    logger.debug(f"删除配置项: {_subid} - {_key}")
-                if _subid in user_interval:
-                    del user_interval[_subid]
-                    logger.debug(f"删除数据项: {_subid} - {_key}")
-            # 保存插件配置
-            pm.save_plugin_config(self.__class__.__name__, config)
-            # 更新数据
-            self.save_data(key="UserInterval", value=user_interval)
-            pm.init_plugin(self.__class__.__name__, config)
-        except Exception as e:
-            logger.error(f"移除设定延迟失败: {e}")
+    @staticmethod
+    def get_render_mode()  -> tuple[str, str]:
+        return "vue", "dist/assets"
 
     def get_form(self):
-        _url = f"api/v1/plugin/SubscribeCal/subscribe?apikey={settings.API_TOKEN}"
-        _domain = settings.MP_DOMAIN() or f"http://{settings.HOST}:{settings.PORT}/"
-        subs = self.subscribeoper.list()
-        interval = self.get_data(key="Interval") or {}
-        def _build_sub_card(sub: Subscribe):
-            """构建订阅卡片"""
-            interval_time = interval.get(str(sub.id), 0)
-            days, remainder = divmod(interval_time, 60 * 24)
-            hours, minutes = divmod(remainder, 60)
-            # 天数表达
-            d = int(days)
-            days_str = "当天" if d == 0 else (f"第{d+1}天" if d > 0 else f"前{abs(d)}天")
-            text = f"{days_str}  {int(hours):02d} : {int(minutes):02d}"
-            return {
-                'component': 'VCard',
-                'props': {
-                    'elevation': '2',  # 卡片阴影
-                    'hover': True,      # 悬停效果
-                    'style': 'transition: all 0.3s;'  # 平滑过渡
-                },
-                'content': [
-                    # 图片区域
-                    {
-                        'component': 'VImg',
-                        'props': {
-                            'src': sub.backdrop or sub.poster,
-                            'height': '180px',
-                            'cover': True,
-                            'gradient': 'to bottom, rgba(0,0,0,0), rgba(0,0,0,0.7)',  # 渐变遮罩
-                            'aspect-ratio': '16/9'  # 固定宽高比
-                        }
-                    },
-                    # 标题区域
-                    {
-                        'component': 'VCardTitle',
-                        'props': {
-                            'class': 'px-3 pt-2 pb-1'  # 内边距
-                        },
-                        'content': [
-                            {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'd-flex align-center',
-                                    'style': 'gap: 0.5rem;'
-                                },
-                                'content': [
-                                    # 剧集类型图标
-                                    {
-                                        'component': 'VIcon' if sub.type == MediaType.TV.value else 'VImg',
-                                        'props': {
-                                            'icon': 'mdi-television' if sub.type == MediaType.TV.value else None,
-                                            'src': 'https://example.com/movie-icon.png' if sub.type == MediaType.MOVIE else None,
-                                            'size': '24',
-                                            'class': 'text-primary'
-                                        }
-                                    },
-                                    # 标题
-                                    {
-                                        'component': 'div',
-                                        'text': f'{sub.name} ({sub.year})',
-                                        'props': {
-                                            'class': 'font-weight-bold',
-                                            'style': 'font-size: 1.1rem; white-space: normal; word-break: break-word; line-height: 1.3;',
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 副标题
-                    {
-                        'component': 'VCardSubtitle',
-                        'props': {
-                            'class': 'px-3 pb-2'
-                        },
-                        'content': [
-                            {
-                                'component': 'div',
-                                'props': {
-                                    'class': 'd-flex align-center',
-                                    'style': 'gap: 0.5rem;'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VIcon',
-                                        'props': {
-                                            'icon': 'mdi-clock-outline',
-                                            'size': '18',
-                                            'class': 'text-secondary'
-                                        }
-                                    },
-                                    {
-                                        'component': 'div',
-                                        'text': f"统计播出时间: [{text}]",
-                                        'props': {
-                                            'style': 'font-size: 0.9rem;'
-                                        }
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    # 配置
-                    {
-                        'component': 'VCardActions',
-                        'content': [
-                            {
-                                'component': 'VRow',
-                                'props': {
-                                    'dense': True,
-                                    'align': 'center',
-                                    'justify': 'space-between'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 'auto'},
-                                        'content': [
-                                            {
-                                                'component': 'VCheckbox',
-                                                'props': {
-                                                    'model': f"_tmp.{sub.id}.enabled",
-                                                    'label': '自定义',
-                                                    'density': 'compact',
-                                                    'hide-details': True,
-                                                    'class': 'mr-2'
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 'auto'},
-                                        'content': [
-                                            {
-                                                'component': 'VTextField',
-                                                'props': {
-                                                    'model': f"_tmp.{sub.id}.days",
-                                                    'placeholder': '天',
-                                                    'type': 'number',
-                                                    'min': 0,
-                                                    'density': 'compact',
-                                                    'variant': 'underlined',
-                                                    'hide-details': True,
-                                                    'style': 'width: 60px;',
-                                                    'single-line': True
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 'auto'},
-                                        'content': [
-                                            {
-                                                'component': 'VSelect',
-                                                'props': {
-                                                    'model': f"_tmp.{sub.id}.hours",
-                                                    'placeholder': '时',
-                                                    'items': [{'title': f"{i:02d}", 'value': i} for i in range(24)],
-                                                    'density': 'compact',
-                                                    'variant': 'underlined',
-                                                    'hide-details': True,
-                                                    'menu-props': {'maxHeight': 200},
-                                                    'style': 'width: 70px;'
-                                                }
-                                            }
-                                        ]
-                                    },
-                                    {
-                                        'component': 'VCol',
-                                        'props': {'cols': 'auto'},
-                                        'content': [
-                                            {
-                                                'component': 'VSelect',
-                                                'props': {
-                                                    'model': f"_tmp.{sub.id}.minutes",
-                                                    'placeholder': '分',
-                                                    'items': [{'title': f"{i:02d}", 'value': i} for i in range(0, 60, 5)],
-                                                    'density': 'compact',
-                                                    'variant': 'underlined',
-                                                    'hide-details': True,
-                                                    'menu-props': {'maxHeight': 200},
-                                                    'style': 'width: 70px;'
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
-
-        return [
-            {
-                'component': 'VForm',
-                'content': [
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'enabled',
-                                            'label': '启用插件',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'calc_time',
-                                            'label': '根据下载历史补充时间',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 6, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VSwitch',
-                                        'props': {
-                                            'model': 'onlyonce',
-                                            'label': '立即更新一次数据',
-                                        }
-                                    }
-                                ]
-                            },
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'calname',
-                                            'label': '日历名称',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'interval_minutes',
-                                            'label': '时间取整间隔(分钟)',
-                                        }
-                                    }
-                                ]
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 8, 'md': 4},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'cron',
-                                            'label': '数据更新周期',
-                                            'placeholder': '五位cron表达式, 留空自动',
-                                        }
-                                    }
-                                ]
-                            },
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VExpansionPanels',
-                                'props': {
-                                    'multiple': False,
-                                    'variant': 'accordion'
-                                },
-                                'content': [
-                                    {
-                                        'component': 'VExpansionPanel',
-                                        'content': [
-                                            # 面板标题
-                                            {
-                                                'component': 'VExpansionPanelTitle',
-                                                'content': [
-                                                    {
-                                                        'component': 'div',
-                                                        'text': f"自定义订阅播出时间（{len(subs)}个）",
-                                                        'props': {
-                                                            'class': 'text-h6 font-weight-bold'
-                                                        }
-                                                    }
-                                                ]
-                                            },
-                                            # 面板内容
-                                            {
-                                                'component': 'VExpansionPanelText',
-                                                'content': [
-                                                    {
-                                                        'component': 'div',
-                                                        'props': {
-                                                            'class': 'grid grid-cols-2 gap-6 md:grid-cols-2 lg:grid-cols-3',
-                                                        },
-                                                        'content': [_build_sub_card(sub) for sub in subs]
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            },
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'success' if self._enabled else 'error',
-                                            'variant': 'tonal',
-                                            'text': True
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'div',
-                                                'props': {
-                                                    'innerHTML': (f'ICS文件可<a href="/api/v1/plugin/SubscribeCal/download/calendar.ics?apikey={settings.API_TOKEN}" target="_blank"><u>点此下载</u></a>'
-                                                                if self._enabled else '插件未启用')
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12},
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'style': 'display: none !important' if not self._enabled else None,
-                                            'text': True
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'div',
-                                                'props': {
-                                                    'innerHTML': f'iCal链接：{_domain}{_url}<br>'
-                                                                '1. 该链接包含API密钥，请妥善保管防止泄露⚠️⚠️<br>'
-                                                                '2. 将iCal链接添加到支持订阅的日历应用（如Outlook、Google Calendar等）<br>'
-                                                                f'3. 服务需公网访问，请将{_domain}替换为您的公网IP/域名'
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            }
-        ], {
-            "enabled": False,
-            "calc_time": False,
-            "onlyonce": False,
-            "cron": "",
-            "calname": "追剧日历",
-            "interval_minutes": 15,
-        }
+        return [], {}
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -764,19 +348,32 @@ class SubscribeCal(_PluginBase):
             logger.error(f"退出插件失败：{str(e)}")
 
     def get_api(self):
-        return[{
-            "path": "/subscribe",
-            "endpoint": self.get_ics,
-            "methods": ["GET"],
-            "summary": "订阅日历",
-            "description": "获取订阅日历",
-            },{
-            "path": "/download/calendar.ics",
-            "endpoint": self.download_ics,
-            "methods": ["GET"],
-            "summary": "下载日历",
-            "description": "下载订阅日历ICS",
-            }]
+        return [
+            {
+                "path": "/subscribe",
+                "endpoint": self.get_ics,
+                "methods": ["GET"],
+                "auth": "apikey",
+                "summary": "订阅日历",
+                "description": "获取订阅日历",
+            },
+            {
+                "path": "/download/calendar.ics",
+                "endpoint": self.download_ics,
+                "methods": ["GET"],
+                "auth": "bear",
+                "summary": "下载日历",
+                "description": "下载订阅日历ICS",
+            },
+            {
+                "path": "/grouped_events",
+                "endpoint": self.get_grouped_events,
+                "methods": ["GET"],
+                "auth": "bear",  # 鉴权类型：apikey/bear
+                "summary": "获取日历事件",
+                "description": "以日期分组获取日历事件",
+            },
+        ]
 
     def get_command(self):
         pass
@@ -786,6 +383,37 @@ class SubscribeCal(_PluginBase):
 
     def get_state(self):
         return self._enabled
+
+    def get_dashboard(self, key: str, **kwargs) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
+        """
+        获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（布局、自动刷新等）；3、仪表板页面元素配置含数据json（vuetify）或 None（vue模式）
+        1、col配置参考：
+        {
+            "cols": 12, "md": 6
+        }
+        2、全局配置参考：
+        {
+            "refresh": 10, // 自动刷新时间，单位秒
+            "border": True, // 是否显示边框，默认True，为False时取消组件边框和边距，由插件自行控制
+            "title": "组件标题", // 组件标题，如有将显示该标题，否则显示插件名称
+            "subtitle": "组件子标题", // 组件子标题，缺省时不展示子标题
+        }
+        3、vuetify模式页面配置使用Vuetify组件拼装，参考：https://vuetifyjs.com/；vue模式为None
+
+        kwargs参数可获取的值：1、user_agent：浏览器UA
+
+        :param key: 仪表盘key，根据指定的key返回相应的仪表盘数据，缺省时返回一个固定的仪表盘数据（兼容旧版）
+        """
+        return (
+            {"cols": 12, "md": 6},
+            {
+                "refresh": 1800,
+                "border": True,
+                "render_mode": "vue",
+                "pluginConfig": {},
+            },
+            None,
+        )
 
     def generate_ics_content(self, calevent: dict[str, CalendarEvent]) -> str:
         """
@@ -830,12 +458,6 @@ class SubscribeCal(_PluginBase):
         # 保存key
         self.save_keys(_tmp_keys)
         logger.info("数据更新完成")
-        # 去除不存在订阅配置项
-        if user_interval := self.get_data(key="UserInterval") or {}:
-            sub_ids = [str(sub.id) for sub in subs]
-            # 删除已删除的订阅配置项
-        if ids := [i for i in user_interval.keys() if i not in sub_ids]:
-            self._del_tmp_config(ids=ids, user_interval=user_interval)
 
     @eventmanager.register(EventType.SubscribeAdded)
     def sub_add_event(self, event: Event):
@@ -881,7 +503,7 @@ class SubscribeCal(_PluginBase):
         :param cal_info: TMDB剧集播出时间
         :return: key, List[CalendarEvent]
         """
-        _key = SubscribeCal.get_sub_key(sub)
+        _key = self.get_sub_key(sub)
         # 获取用户设定的延迟时间
         user_interval = self.get_data(key="UserInterval") or {}
         minutes = user_interval.get(str(sub.id), None) # 用户设置优先
@@ -918,6 +540,78 @@ class SubscribeCal(_PluginBase):
         self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
         logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         return _key
+
+    def get_grouped_events(self) -> dict[str, list[TimeLineItem]]:
+        """
+        返回给前端特定数据
+        """
+        groups: dict[str, list[TimeLineItem]] = {}
+        # 日期范围(最近一周)
+        date_range = self.get_date_strings(3, 3)
+        # 获取所有订阅
+        subs = self.subscribeoper.list()
+        for sub in subs:
+            # 跳过洗版
+            if sub.best_version: continue
+            _key = self.get_sub_key(sub)
+            event_data = self.get_event_data(key=_key) or {}
+            for _, epinfo in event_data.items():
+                date = self.format_date_from_dtstart(epinfo.dtstart)
+                if date in date_range:
+                    groups.setdefault(date, []).append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}))
+
+        # ===== 筛选与今天最接近的三项 =====
+        today = datetime.datetime.today().date()
+        # 将字符串转成 date 对象并排序
+        sorted_dates = sorted(
+            [(datetime.datetime.strptime(d, "%Y-%m-%d").date(), d) for d in groups.keys()],
+            key=lambda x: abs((x[0] - today).days)
+        )
+
+        # 分类：过去、今天、未来
+        past_dates = [d for d in sorted_dates if d[0] < today]
+        future_dates = [d for d in sorted_dates if d[0] >= today]
+
+        # 规则：取一个最近的过去 + 两个未来日期（包含今天）
+        selected_dates = []
+        if past_dates:
+            selected_dates.append(past_dates[0])  # 最近的过去日期
+
+        selected_dates.extend(future_dates[:2])  # 今天或未来的前两个日期
+
+        # 若未来不足两个，用过去的补全（最多选三个）
+        while len(selected_dates) < 3 and past_dates:
+            candidate = past_dates.pop()  # 取更久远的过去
+            if candidate not in selected_dates:
+                selected_dates.append(candidate)
+
+        # 构建最终结果字典
+        final_events = {dt_str: groups[dt_str] for dt_obj, dt_str in selected_dates}
+
+        return final_events
+
+    @staticmethod
+    def format_date_from_dtstart(dtstart: str) -> str:
+        """
+        使用字符串切片从 dtstart 提取日期并格式化为 'YYYY-MM-DD'
+
+        :param dtstart: 格式为 "%Y%m%dT%H%M%SZ" 的时间字符串，如 "20250404T123000Z"
+        :return: 格式为 'YYYY-MM-DD' 的日期字符串
+        """
+        return f"{dtstart[0:4]}-{dtstart[4:6]}-{dtstart[6:8]}"
+
+    @staticmethod
+    def get_date_strings(days_before: int = 1, days_after: int = 1) -> set[str]:
+        """
+        获取指定时间范围内的日期字符串列表
+
+        :param days_before: 今天之前的天数（0 表示不包含今天以前）
+        :param days_after:  今天之后的天数（0 表示不包含今天以后）
+        :return: 包含日期字符串的集合，如 {'2025-04-04', '2025-04-05', '2025-04-06'}
+        """
+        today = datetime.date.today()
+        date_list = [(today + datetime.timedelta(days=i)) for i in range(-days_before, days_after + 1)]
+        return {str(date) for date in date_list}
 
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
         # 序列化事件数据
