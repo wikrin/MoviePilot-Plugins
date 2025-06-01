@@ -40,43 +40,43 @@ const handleDialogClick = (event: Event) => {
  */
 const parseUTCDateTime = (dateStr: string): Date | null => {
   // 简单校验格式是否符合 YYYYMMDDTHHMMSSZ
-  const regex = /^\d{8}T\d{6}Z$/;
+  const regex = /^\d{8}T\d{6}Z$/
   if (!regex.test(dateStr)) {
-    console.warn(`Invalid date format: ${dateStr}`);
-    return null;
+    console.warn(`Invalid date format: ${dateStr}`)
+    return null
   }
 
-  const year = parseInt(dateStr.slice(0, 4), 10);
-  const month = parseInt(dateStr.slice(4, 6), 10) - 1; // 月份从 0 开始
-  const day = parseInt(dateStr.slice(6, 8), 10);
-  const hour = parseInt(dateStr.slice(9, 11), 10);
-  const minute = parseInt(dateStr.slice(11, 13), 10);
-  const second = parseInt(dateStr.slice(13, 15), 10);
+  const year = parseInt(dateStr.slice(0, 4), 10)
+  const month = parseInt(dateStr.slice(4, 6), 10) - 1 // 月份从 0 开始
+  const day = parseInt(dateStr.slice(6, 8), 10)
+  const hour = parseInt(dateStr.slice(9, 11), 10)
+  const minute = parseInt(dateStr.slice(11, 13), 10)
+  const second = parseInt(dateStr.slice(13, 15), 10)
 
   // 使用 UTC 时间构造
-  return new Date(Date.UTC(year, month, day, hour, minute, second));
-};
+  return new Date(Date.UTC(year, month, day, hour, minute, second))
+}
 
 function getStatusColor(event: TimeLineItem): string {
   // 如果开始和结束时间都是 16:00，则认为时间不准确
   if (event.dtstart?.slice(9, 13) === '1600' && event.dtend?.slice(9, 13) === '1600') {
-    return 'purple'; // 特殊处理：时间不准确
+    return 'purple' // 特殊处理：时间不准确
   }
 
-  const date = parseUTCDateTime(event.dtstart);
-  if (!date) return 'grey';
+  const date = parseUTCDateTime(event.dtstart)
+  if (!date) return 'grey'
 
   // 转换为本地时间
-  const localDate = new Date(date.getTime() + new Date().getTimezoneOffset() * 60000);
-  const localHour = localDate.getHours();
+  const localDate = new Date(date.getTime() + new Date().getTimezoneOffset() * 60000)
+  const localHour = localDate.getHours()
 
-  if (localHour >= 6 && localHour < 12) return 'amber';
-  else if (localHour >= 12 && localHour < 14) return 'yellow';
-  else if (localHour >= 14 && localHour < 18) return 'blue';
-  else if (localHour >= 18 && localHour < 20) return 'orange';
-  else if (localHour >= 20 || localHour < 6) return 'deep-purple';
+  if (localHour >= 6 && localHour < 12) return 'amber'
+  else if (localHour >= 12 && localHour < 14) return 'yellow'
+  else if (localHour >= 14 && localHour < 18) return 'blue'
+  else if (localHour >= 18 && localHour < 20) return 'orange'
+  else if (localHour >= 20 || localHour < 6) return 'deep-purple'
 
-  return 'grey';
+  return 'grey'
 }
 
 // 排序
@@ -148,7 +148,7 @@ function getIconForEventType(type: string): string {
           >
             <v-timeline-item
               v-for="(event, index) in sortedEvents"
-              :key="index"
+              :key="event.uid"
               size="small"
               :dot-color="getStatusColor(event)"
               :icon="getIconForEventType(event.type)"

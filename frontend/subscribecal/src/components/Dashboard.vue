@@ -24,23 +24,109 @@ const timeLineGroups = reactive<TimeLineGroup[]>([])
 
 // 组件状态
 const loading = ref(true)
+const userScrolled = ref(false); // 是否发生过用户滑动
+let fixedBaseIndex = -1; // 固定的 baseIndex，仅在用户滑动后生效
 
-// 获取日历事件
-async function fetchTimeLineGroups() {
+// 当前已加载的天数范围
+const loadedRange = reactive({
+  before: 0, // 已加载的过去天数
+  after: 0,  // 已加载的未来天数
+});
+
+async function fetchTimeLineGroups(beforeDays, afterDays) {
   try {
-    const res: Object = await props.api.get('plugin/SubscribeCal/grouped_events')
+    const res: Object = await props.api.get(`plugin/SubscribeCal/grouped_events`, {
+      params: { before_days: beforeDays, after_days: afterDays }
+    });
 
-    // 转换对象结构为 TimeLineGroup[]
-    const groups = Object.entries(res).map(([date, items]) => ({
-      date,
-      items: items
-    }))
+    // 提取并排序
+    const groups = Object.entries(res)
+      .map(([date, items]) => ({
+        date,
+        items
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    timeLineGroups.push(...groups)
+    // 使用Map进行去重，保证每个日期只保留一条数据
+    const uniqueGroups = new Map();
+    groups.forEach(group => {
+      if (!uniqueGroups.has(group.date)) {
+        uniqueGroups.set(group.date, group);
+      }
+    });
+
+    const filteredGroups = Array.from(uniqueGroups.values());
+
+    if (beforeDays > loadedRange.before) {
+      // 添加过往数据
+      timeLineGroups.unshift(...filteredGroups);
+      loadedRange.before = beforeDays;
+    }
+
+    if (afterDays > loadedRange.after) {
+      // 添加未来数据
+      timeLineGroups.push(...filteredGroups);
+      loadedRange.after = afterDays;
+    }
   } catch (error) {
-    console.error(error)
+    console.error(error);
   }
 }
+
+
+function getBaseIndex(): number {
+  if (userScrolled.value && fixedBaseIndex >= 0) {
+    return fixedBaseIndex;
+  }
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayIndex = timeLineGroups.findIndex(g => g.date === todayStr);
+
+  if (todayIndex !== -1) {
+    return todayIndex;
+  }
+
+  const futureIndex = timeLineGroups.findIndex(g => {
+    const groupDate = new Date(g.date);
+    const today = new Date();
+    return groupDate >= new Date(today.getFullYear(), today.getMonth(), today.getDate())
+  })
+
+  return futureIndex !== -1 ? futureIndex : 0
+}
+
+function getUniqueGroups(groups: TimeLineGroup[]): TimeLineGroup[] {
+  const seen = new Set<string>()
+  const result: TimeLineGroup[] = []
+
+  for (const group of groups) {
+    if (!seen.has(group.date)) {
+      seen.add(group.date)
+      result.push(group)
+    }
+  }
+  return result
+}
+
+// 计算显示的分组
+const displayedGroups = computed(() => {
+  console.log('[getDisplayedGroups] 计算显示的分组...')
+  const baseIndex = getBaseIndex()
+  if (baseIndex === -1) return []
+
+  // 先统一去重
+  const uniqueGroups = getUniqueGroups(timeLineGroups)
+
+  if (userScrolled.value) {
+    // 已滑动：返回所有去重后的数据
+    return uniqueGroups
+  } else {
+    // 未滑动：只显示 baseIndex 前2个 + 后4个 范围内的数据
+    const start = Math.max(0, baseIndex - 2)
+    const end = Math.min(uniqueGroups.length - 1, baseIndex + 4)
+
+    return uniqueGroups.slice(start, end + 1)
+  }
+})
 
 // 获取状态颜色
 function getStatusColor(group: TimeLineGroup): string {
@@ -70,14 +156,9 @@ function getTimelineItemSize(group: TimeLineGroup): string {
   }
 }
 
-// 显示三项
-const displayedGroups = computed(() => {
-  return timeLineGroups.slice(0, 3)
-})
-
 // 初始化
 onMounted(async () => {
-  await fetchTimeLineGroups()
+  await fetchTimeLineGroups(4, 5)
   loading.value = false
 })
 </script>
@@ -105,7 +186,7 @@ onMounted(async () => {
           >
             <v-timeline-item
               v-for="(group, index) in displayedGroups"
-              :key="index"
+              :key="group.date"
               :dot-color="getStatusColor(group)"
               :size="getTimelineItemSize(group)">
               <template v-slot:opposite>
@@ -116,6 +197,9 @@ onMounted(async () => {
           </v-timeline>
         </div>
       </v-card-text>
+      <div class="absolute right-5 top-5">
+        <VIcon class="cursor-move">mdi-drag</VIcon>
+      </div>
     </v-card>
   </div>
 </template>

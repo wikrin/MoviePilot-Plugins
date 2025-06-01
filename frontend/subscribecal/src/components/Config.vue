@@ -21,7 +21,8 @@ const defaultConfig = reactive({
   onlyonce: false,
   interval_minutes: 15,
   calname: '追剧日历',
-  cron: ''
+  cron: '',
+  dashboard_size : 6,
 })
 
 const config = reactive({ ...defaultConfig })
@@ -239,7 +240,7 @@ onMounted (() => {
               </v-row>
               <!-- 文本填写区域 -->
               <v-row no-gutters>
-                <v-col cols="12" md="4" class="pl-md-2 pb-2">
+                <v-col cols="12" md="3" class="pl-md-2 pb-2">
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">日历名称</span>
@@ -252,7 +253,7 @@ onMounted (() => {
                     />
                   </div>
                 </v-col>
-                <v-col cols="12" md="4" class="pl-md-2 pb-2">
+                <v-col cols="12" md="3" class="pl-md-2 pb-2">
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">时间取整间隔（分钟）</span>
@@ -265,7 +266,7 @@ onMounted (() => {
                     />
                   </div>
                 </v-col>
-                <v-col cols="12" md="4" class="pl-md-2 pb-2">
+                <v-col cols="12" md="3" class="pl-md-2 pb-2">
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">数据更新周期</span>
@@ -276,6 +277,19 @@ onMounted (() => {
                       hide-details
                       placeholder="留空自动"
                       style="max-width: 150px"
+                    />
+                  </div>
+                </v-col>
+                <v-col cols="12" md="3" class="pl-md-2 pb-2">
+                  <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
+                    <div class="d-flex align-center">
+                      <span class="text-subtitle-2">仪表盘宽度</span>
+                    </div>
+                    <v-text-field
+                      v-model.number="config.dashboard_size"
+                      density="compact"
+                      hide-details
+                      placeholder="留空自动"
                     />
                   </div>
                 </v-col>

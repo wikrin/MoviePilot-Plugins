@@ -18,7 +18,6 @@ from app.chain.subscribe import Subscribe
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
-from app.core.plugin import PluginManager
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.subscribe_oper import SubscribeOper
 from app.log import logger
@@ -234,7 +233,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.7"
+    plugin_version = "1.0.8"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -256,6 +255,7 @@ class SubscribeCal(_PluginBase):
     _calc_time: bool = False
     _calname: str = "追剧日历"
     _interval_minutes: int = 15
+    _dashboard_size: int = 6
 
     def init_plugin(self, config: dict = None):
         self.downloadhis = DownloadHistoryOper()
@@ -280,6 +280,7 @@ class SubscribeCal(_PluginBase):
                 "calc_time",
                 "calname",
                 "interval_minutes",
+                "dashboard_size"
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
@@ -309,6 +310,7 @@ class SubscribeCal(_PluginBase):
                 "calc_time": self._calc_time,
                 "calname": self._calname,
                 "interval_minutes": self._interval_minutes,
+                "dashboard_size": self._dashboard_size,
             }
         )
 
@@ -405,7 +407,7 @@ class SubscribeCal(_PluginBase):
         :param key: 仪表盘key，根据指定的key返回相应的仪表盘数据，缺省时返回一个固定的仪表盘数据（兼容旧版）
         """
         return (
-            {"cols": 12, "md": 6},
+            {"cols": self._dashboard_size * 2, "md": self._dashboard_size},
             {
                 "refresh": 1800,
                 "border": True,
@@ -541,13 +543,13 @@ class SubscribeCal(_PluginBase):
         logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         return _key
 
-    def get_grouped_events(self) -> dict[str, list[TimeLineItem]]:
+    def get_grouped_events(self, before_days: int = 3, after_days: int = 3) -> dict[str, list[TimeLineItem]]:
         """
         返回给前端特定数据
         """
         groups: dict[str, list[TimeLineItem]] = {}
         # 日期范围(最近一周)
-        date_range = self.get_date_strings(3, 3)
+        date_range = self.get_date_strings(before_days, after_days)
         # 获取所有订阅
         subs = self.subscribeoper.list()
         for sub in subs:
@@ -560,35 +562,7 @@ class SubscribeCal(_PluginBase):
                 if date in date_range:
                     groups.setdefault(date, []).append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}))
 
-        # ===== 筛选与今天最接近的三项 =====
-        today = datetime.datetime.today().date()
-        # 将字符串转成 date 对象并排序
-        sorted_dates = sorted(
-            [(datetime.datetime.strptime(d, "%Y-%m-%d").date(), d) for d in groups.keys()],
-            key=lambda x: abs((x[0] - today).days)
-        )
-
-        # 分类：过去、今天、未来
-        past_dates = [d for d in sorted_dates if d[0] < today]
-        future_dates = [d for d in sorted_dates if d[0] >= today]
-
-        # 规则：取一个最近的过去 + 两个未来日期（包含今天）
-        selected_dates = []
-        if past_dates:
-            selected_dates.append(past_dates[0])  # 最近的过去日期
-
-        selected_dates.extend(future_dates[:2])  # 今天或未来的前两个日期
-
-        # 若未来不足两个，用过去的补全（最多选三个）
-        while len(selected_dates) < 3 and past_dates:
-            candidate = past_dates.pop()  # 取更久远的过去
-            if candidate not in selected_dates:
-                selected_dates.append(candidate)
-
-        # 构建最终结果字典
-        final_events = {dt_str: groups[dt_str] for dt_obj, dt_str in selected_dates}
-
-        return final_events
+        return groups
 
     @staticmethod
     def format_date_from_dtstart(dtstart: str) -> str:
@@ -601,7 +575,7 @@ class SubscribeCal(_PluginBase):
         return f"{dtstart[0:4]}-{dtstart[4:6]}-{dtstart[6:8]}"
 
     @staticmethod
-    def get_date_strings(days_before: int = 1, days_after: int = 1) -> set[str]:
+    def get_date_strings(before_days: int = 1, after_days: int = 1) -> set[str]:
         """
         获取指定时间范围内的日期字符串列表
 
@@ -610,7 +584,7 @@ class SubscribeCal(_PluginBase):
         :return: 包含日期字符串的集合，如 {'2025-04-04', '2025-04-05', '2025-04-06'}
         """
         today = datetime.date.today()
-        date_list = [(today + datetime.timedelta(days=i)) for i in range(-days_before, days_after + 1)]
+        date_list = [(today + datetime.timedelta(days=i)) for i in range(-before_days, after_days + 1)]
         return {str(date) for date in date_list}
 
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):

@@ -22,8 +22,3 @@ app.use(vuetify)
 
 // 挂载应用
 app.mount('#app')
-
-
-
-app.use(naive);
-app.mount('#app');
