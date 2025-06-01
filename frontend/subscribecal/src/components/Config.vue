@@ -82,7 +82,7 @@ async function copyUrl() {
     if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
       baseUrl = 'http://' + baseUrl
     }
-    const url = new URL(`${baseUrl}/plugin/SubscribeCal/subscribe`)
+    const url = new URL(`${baseUrl}/api/v1/plugin/SubscribeCal/subscribe`)
     url.searchParams.append('apikey', token)
 
     // 复制到剪贴板
