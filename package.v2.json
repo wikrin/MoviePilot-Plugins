@@ -53,9 +53,15 @@
       "version": "1.0.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
-      "level": 1,
-      "history": {
-        "1.0.0": "init"
-      }
+      "level": 1
+    },
+    "EnrichWebhook": {
+      "name": "Jellyfin报文补充",
+      "description": "补充webhook事件 item_path 字段",
+      "labels": "工具, Jellyfin",
+      "version": "1.0.0",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/path_a.png",
+      "author": "Attente",
+      "level": 1
     }
   }
