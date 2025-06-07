@@ -17,7 +17,7 @@
     {
       "label": "Plugin-Frontebd Dev",
       "type": "shell",
-      "command": "./vscode-task-runner.sh",
+      "command": "./finalize-dist.sh",
       "args": [
         "dev"
       ],
@@ -34,7 +34,7 @@
     {
       "label": "Plugin-Frontebd Build",
       "type": "shell",
-      "command": "./vscode-task-runner.sh",
+      "command": "./finalize-dist.sh",
       "args": [
         "build"
       ],
@@ -51,7 +51,7 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": "^Run mode:",
-          "endsPattern": "^Build artifacts moved to:"
+          "endsPattern": ".*Cleanup completed.$"
         }
       }
     },

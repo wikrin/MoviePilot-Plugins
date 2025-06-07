@@ -1,0 +1,136 @@
+name: Build Plugins Frantend
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_paths:
+        type: string
+        description: 'Comma-separated list of plugin paths to build (optional)'
+  push:
+    paths:
+      - 'frontend/**/package.json'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js & Yarn
+        uses: actions/setup-node@v3
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Extract Plugin Paths
+        id: extract_paths
+        run: |
+          extract_plugin_paths() {
+            local modified_files
+            modified_files=$(git diff --name-only ${{ github.event.before }} ${{ github.event.after }} | grep 'frontend/.*/package.json')
+            if [[ -z "$modified_files" ]]; then
+              echo "::error::❌ No package.json files modified in last commit"
+              exit 1
+            fi
+            echo "$modified_files" | sed -E 's|/package.json$||'
+          }
+
+          if [[ -n "${{ github.event.inputs.plugin_paths }}" ]]; then
+            IFS=',' read -r -a plugin_paths <<< "${{ github.event.inputs.plugin_paths }}"
+            echo "::notice::📦 Using provided plugin paths: ${plugin_paths[*]}"
+          else
+            mapfile -t plugin_paths < <(extract_plugin_paths)
+            echo "::notice::🔍 Detected plugins from last commit: ${plugin_paths[*]}"
+          fi
+
+          echo "PLUGIN_PATHS=${plugin_paths[*]}" >> "$GITHUB_ENV"
+          echo "paths=${plugin_paths[*]}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate Cache Keys
+        id: cache-keys
+        run: |
+          CACHE_KEYS=""
+          echo "🔍 Generating cache keys for plugins:"
+          for path in ${PLUGIN_PATHS//,/ }; do
+            if [ -f "$path/yarn.lock" ]; then
+              HASH=$(md5sum "$path/yarn.lock" | cut -d ' ' -f1)
+              CACHE_KEYS+="$path:$HASH;"
+              echo "📝 $path -> $HASH"
+            fi
+          done
+          echo "keys=${CACHE_KEYS}" >> "$GITHUB_OUTPUT"
+          echo "💾 Final cache key: $CACHE_KEYS"
+
+      - name: Restore Dependencies Cache
+        id: cache-deps
+        uses: actions/cache@v3
+        with:
+          path: |
+            frontend/*/node_modules
+            frontend/*/.yarn/cache
+          key: ${{ runner.os }}-yarn-${{ steps.cache-keys.outputs.keys }}
+          restore-keys: |
+            ${{ runner.os }}-yarn-
+
+      - name: Check Cache Status
+        run: |
+          echo "::group::🔍 Checking cache status"
+          for path in ${PLUGIN_PATHS//,/ }; do
+            if [ -d "$path/node_modules" ]; then
+              echo "✅ Cache hit for $path/node_modules"
+              echo "📦 Cache size: $(du -sh $path/node_modules)"
+              echo "⏱️ Last modified: $(stat -c %y $path/node_modules)"
+            else
+              echo "❌ Cache miss for $path/node_modules"
+            fi
+          done
+          echo "::endgroup::"
+
+      - name: Install Dependencies
+        run: |
+          for path in ${PLUGIN_PATHS//,/ }; do
+            echo "::group::📦 Installing dependencies for $path"
+            cd $path
+
+            if [ -d "node_modules" ]; then
+              echo "✅ Using cached node_modules"
+            else
+              echo "⚠️ Fresh install needed"
+            fi
+
+            yarn install
+            cd -
+            echo "::endgroup::"
+          done
+
+      - name: Build Plugins with Finalizer
+        run: |
+          chmod +x finalize-dist.sh
+          for full_path in ${PLUGIN_PATHS//,/ }; do
+            echo "::group::🛠️ Building plugin: $full_path"
+            ./finalize-dist.sh "build" "$full_path" || { echo "❌ Build failed: $full_path"; exit 1; }
+            echo "✅ Built: $full_path"
+            echo "::endgroup::"
+          done
+
+      - name: Commit Dist Changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "Auto Build Agent"
+          git add -f plugins.v2/*/dist/
+          if git diff --cached --exit-code; then
+            echo "⚪ No changes to commit"
+            exit 0
+          else
+            git commit -m "Build plugin dist files"
+          fi
+
+      - name: Push Changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}
