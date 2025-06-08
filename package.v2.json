@@ -60,9 +60,12 @@
       "name": "Jellyfin报文补充",
       "description": "补充webhook事件 item_path 字段",
       "labels": "工具, Jellyfin",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/path_a.png",
       "author": "Attente",
-      "level": 1
+      "level": 1,
+      "history": {
+        "1.0.1": "完善逻辑, 增加`tmdb_id`的更正"
+      }
     }
   }

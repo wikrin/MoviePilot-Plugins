@@ -5,10 +5,12 @@ from typing import Any, Dict, List, Optional
 
 # 项目库
 from app.core.config import settings
+from app.db.models.mediaserver import MediaServerItem
 from app.helper.mediaserver import MediaServerHelper
 from app.log import logger
 from app.modules.jellyfin.jellyfin import Jellyfin
 from app.plugins import _PluginBase
+from app.schemas.mediaserver import WebhookEventInfo
 from app.utils.http import RequestUtils
 
 
@@ -76,7 +78,7 @@ class JellyfinExtension(Jellyfin):
             logger.error(f"未知错误：{str(e)}，URL={url}")
             return []
 
-    def find_first_match_regex(self, item_id: str) -> Optional[Dict[str, str]]:
+    def find_first_match_regex(self, item_id: str) -> Optional[str]:
         """
         使用正则表达式查找匹配项
         :param item_id: 要查找的 Item ID（不带连字符）
@@ -111,12 +113,7 @@ class JellyfinExtension(Jellyfin):
                 logger.debug(f"跳过非媒体文件：{path}")
                 continue
 
-            return {
-                "type": match.group(1),
-                "name": match.group(2),
-                "path": path,
-                "id": match.group(4)
-            }
+            return path
 
         return None
 
@@ -129,7 +126,7 @@ class EnrichWebhook(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/path_a.png"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -228,27 +225,47 @@ class EnrichWebhook(_PluginBase):
 
     def enrich_webhook(self, body: Any, form: Any, args: Any):
         source = args.get("source")
-        webhookinfo = None
+        webhookinfo: WebhookEventInfo = None
 
         if source:
             serverinfo = self.mediaserver_helper.get_service(source, "jellyfin")
             if serverinfo:
+                logger.info(f"获取到 Jellyfin 服务器信息：{serverinfo.name}")
                 webhookinfo = serverinfo.instance.get_webhook_message(body)
         else:
             jellyfin_servers = self.mediaserver_helper.get_services("jellyfin")
+            logger.info(f"发现 {len(jellyfin_servers or {})} 个 Jellyfin 服务器")
             for serverinfo in (jellyfin_servers or {}).values():
                 webhookinfo = serverinfo.instance.get_webhook_message(body)
                 if webhookinfo:
+                    logger.info(f"从服务器 {serverinfo.name} 成功获取 webhook 消息")
                     break
 
         if not webhookinfo:
+            logger.warning("未能获取到有效的 webhook 消息")
             return None
 
+        logger.debug(f"当前 webhookinfo 内容：{webhookinfo.dict()}")
+
         if webhookinfo.item_path is None:
+            logger.info("item_path 为空，开始补充路径信息")
             jellyfin_ext = JellyfinExtension(serverinfo.instance)
+            # 补充 item_path
             if result := jellyfin_ext.find_first_match_regex(webhookinfo.item_id):
-                webhookinfo.item_path = result.get("path")
+                webhookinfo.item_path = result
+                logger.info(f"成功获取 item_path：{result}")
+            # 修正 tmdb_id
+            if series_id := webhookinfo.json_object.get("SeriesId"):
+                iteminfo = jellyfin_ext.get_iteminfo(series_id)
+                if iteminfo and iteminfo.tmdbid:
+                    webhookinfo.tmdb_id = iteminfo.tmdbid
+                    logger.info(f"通过 Jellyfin API 获取到 TMDB ID：{iteminfo.tmdbid}")
+                else:
+                    # 尝试通过同步数据获取
+                    item = MediaServerItem.get_by_itemid(None, series_id)
+                    if item and item.tmdbid:
+                        webhookinfo.tmdb_id = item.tmdbid
+                        logger.info(f"通过本地数据库获取到 TMDB ID：{item.tmdbid}")
 
+        logger.info(f"完成 webhook 处理：tmdbid: {webhookinfo.tmdb_id}, item_path: {webhookinfo.item_path}")
         return webhookinfo
-
-
