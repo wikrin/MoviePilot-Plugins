@@ -45,7 +45,6 @@ async function loadDownloaderSetting() {
   try {
     const downloaders = await props.api.get('download/clients')
     downloaderOptions.value = [
-      { title: '默认', value: '' },
       ...downloaders.map((item: { name: any }) => ({
         title: item.name,
         value: item.name,
