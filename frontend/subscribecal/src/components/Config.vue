@@ -209,7 +209,7 @@ onMounted (() => {
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
                       <v-icon icon="mdi-history" size="small" :color="config.calc_time ? 'info' : 'grey'" class="mr-3" />
-                      <span class="text-subtitle-2">根据下载记录补充时间</span>
+                      <span class="text-subtitle-2">使用下载记录补充时间</span>
                     </div>
                     <v-switch
                       v-model="config.calc_time"
@@ -256,7 +256,7 @@ onMounted (() => {
                 <v-col cols="12" md="3" class="pl-md-2 pb-2">
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
-                      <span class="text-subtitle-2">时间取整间隔（分钟）</span>
+                      <span class="text-subtitle-2">时间取整间隔(分钟)</span>
                     </div>
                     <v-text-field
                       v-model.number="config.interval_minutes"

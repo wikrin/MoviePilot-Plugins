@@ -23,7 +23,7 @@ const props = defineProps({
 const timeLineGroups = reactive<TimeLineGroup[]>([])
 
 // 组件状态
-const loading = ref(true)
+const loading = ref<boolean>(true)
 const userScrolled = ref(false); // 是否发生过用户滑动
 let fixedBaseIndex = -1; // 固定的 baseIndex，仅在用户滑动后生效
 
@@ -136,13 +136,13 @@ function getStatusColor(group: TimeLineGroup): string {
   const diffDays = Math.ceil((eventDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 
   if (eventDate < new Date(today.getFullYear(), today.getMonth(), today.getDate())) {
-    return 'grey' // 过去
+    return '#CCCCCC' // 过去
   } else if (diffDays === 0) {
-    return 'primary' // 今天
+    return '#66BB6A' // 今天
   } else if (diffDays <= 3) {
-    return 'warning' // 即将到来（3天内）
+    return '#FFC107' // 即将到来
   } else {
-    return 'success' // 较远未来
+    return '#FF6D00' // 较远未来
   }
 }
 

@@ -60,23 +60,23 @@ const parseUTCDateTime = (dateStr: string): Date | null => {
 function getStatusColor(event: TimeLineItem): string {
   // 如果开始和结束时间都是 16:00，则认为时间不准确
   if (event.dtstart?.slice(9, 13) === '1600' && event.dtend?.slice(9, 13) === '1600') {
-    return 'purple' // 特殊处理：时间不准确
+    return '#9C27B0' // 深紫红 - 时间不准确
   }
 
   const date = parseUTCDateTime(event.dtstart)
-  if (!date) return 'grey'
+  if (!date) return '#CCCCCC' // 浅灰 - 默认未知状态
 
   // 转换为本地时间
   const localDate = new Date(date.getTime() + new Date().getTimezoneOffset() * 60000)
   const localHour = localDate.getHours()
 
-  if (localHour >= 6 && localHour < 12) return 'amber'
-  else if (localHour >= 12 && localHour < 14) return 'yellow'
-  else if (localHour >= 14 && localHour < 18) return 'blue'
-  else if (localHour >= 18 && localHour < 20) return 'orange'
-  else if (localHour >= 20 || localHour < 6) return 'deep-purple'
+  if (localHour >= 6 && localHour < 12) return '#FFA000' // 橘黄色 - 上午
+  else if (localHour >= 12 && localHour < 14) return '#FFF176' // 浅金黄 - 中午
+  else if (localHour >= 14 && localHour < 18) return '#4DD0E1' // 天蓝 - 下午
+  else if (localHour >= 18 && localHour < 20) return '#FB8C00' // 橘红 - 傍晚
+  else if (localHour >= 20 || localHour < 6) return '#303F9F' // 深蓝紫 - 夜间/凌晨
 
-  return 'grey'
+  return '#CCCCCC' // 默认浅灰色
 }
 
 // 排序
@@ -96,12 +96,46 @@ const sortedEvents = computed(() => {
       const dateA = Date.parse(formatDateString(a.dtstart))
       const dateB = Date.parse(formatDateString(b.dtstart))
 
-      if (isNaN(dateA) || isNaN(dateB)) {
-        return isNaN(dateA) ? 1 : -1
-      }
+      // 非法日期排在后面
+      if (isNaN(dateA)) return 1
+      if (isNaN(dateB)) return -1
 
-      return dateA - dateB
+      // 按时间排序
+      if (dateA !== dateB) return dateA - dateB
+
+      // 时间相同则按 id 排序
+      if (a.id !== b.id) return a.id < b.id ? -1 : 1
+
+      // 判断 episode 是否存在
+      const hasAEpisode = a.episode != null
+      const hasBEpisode = b.episode != null
+
+      // 没有 episode 的排在后面
+      if (!hasAEpisode && hasBEpisode) return 1
+      if (hasAEpisode && !hasBEpisode) return -1
+
+      // 如果都有 episode，则按 episode 升序排列
+      if (hasAEpisode && hasBEpisode) return (a.episode ?? 0) - (b.episode ?? 0)
+
+      // 如果都没有 episode，保持原有顺序
+      return 0
     })
+})
+
+// 过滤出 id 不重复的事件，并取前四项
+const uniqueEvents = computed<TimeLineItem[]>(() => {
+  const seenIds = new Set()
+  const result: TimeLineItem[] = []
+
+  for (const event of sortedEvents.value) {
+    if (!seenIds.has(event.id)) {
+      seenIds.add(event.id)
+      result.push(event)
+      if (result.length >= 4) break
+    }
+  }
+
+  return result
 })
 
 function getIconForEventType(type: string): string {
@@ -120,8 +154,8 @@ function getIconForEventType(type: string): string {
   <div class="card-container" @click="openDialog">
     <div class="stacked-cards">
       <div
-        v-for="(event, index) in sortedEvents.slice(0, 4)"
-        :key="event.id || index"
+        v-for="(event, index) in uniqueEvents"
+        :key="event.id"
         class="stacked-image"
         :class="`image-${position}`"
       >
@@ -144,14 +178,15 @@ function getIconForEventType(type: string): string {
             side="end"
             direction="vertical"
             line-color="primary"
-            class="dense-timeline"
+            class="dense-timeline scrollable-timeline"
           >
             <v-timeline-item
-              v-for="(event, index) in sortedEvents"
+              v-for="event in sortedEvents"
               :key="event.uid"
               size="small"
               :dot-color="getStatusColor(event)"
               :icon="getIconForEventType(event.type)"
+              fill-dot
             >
               <VCard>
               <div class="d-flex justify-space-between flex-nowrap flex-row">
@@ -176,7 +211,7 @@ function getIconForEventType(type: string): string {
                     {{ event.summary }}
                   </VCardSubtitle>
                   <VCardText class="pa-0 px-2 break-words">
-                    <v-icon small color="amber" class="mr-1">mdi-star</v-icon>
+                    <v-icon small color="#FFB400" class="mr-1">mdi-star</v-icon>
                     <span class="mr-4">{{ event.vote ?? '暂无' }}</span>
                     <v-icon small color="primary" class="mr-1">mdi-clock-time-four-outline</v-icon>
                     <span>
@@ -323,6 +358,13 @@ function getIconForEventType(type: string): string {
   padding-bottom: 2%;
   right: 3%;
   top: 0;
+}
+
+/* 设置时间轴最大高度并启用垂直滚动 */
+.scrollable-timeline {
+  max-height: 60vh; /* 控制最大可视区域高度 */
+  overflow-y: auto; /* 启用垂直滚动 */
+  scrollbar-width: thin; /* Firefox：窄滚动条 */
 }
 
 /* hover效果微调 */

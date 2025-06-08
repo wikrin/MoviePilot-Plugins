@@ -19,6 +19,8 @@ export interface TimeLineItem {
   type: string
   // 季号
   season?: number
+  // 集号
+  episode?: number
   // 海报
   poster: string
   // 背景图
