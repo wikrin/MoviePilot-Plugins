@@ -1,9 +1,10 @@
 # 基础库
+import re
 from cachetools import TTLCache
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
 import datetime
 import statistics
+from typing import Any, Dict, List, Optional, Tuple
 import uuid
 
 # 第三方库
@@ -50,7 +51,7 @@ class CalendarInfo:
     # 集简介
     overview: Optional[str] = None
     # 时长
-    runtime: Optional[int] = 30
+    runtime: Optional[int] = None
     # 季号
     season_number: Optional[int] = None
 
@@ -215,6 +216,8 @@ class TimeLineItem(BaseModel):
     type: Optional[str]
     # 季号
     season: Optional[int]
+    # 集号
+    episode: Optional[int]
     # 海报
     poster: Optional[str]
     # 背景图
@@ -233,7 +236,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.8"
+    plugin_version = "1.0.9"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -506,9 +509,7 @@ class SubscribeCal(_PluginBase):
         :return: key, List[CalendarEvent]
         """
         _key = self.get_sub_key(sub)
-        # 获取用户设定的延迟时间
-        user_interval = self.get_data(key="UserInterval") or {}
-        minutes = user_interval.get(str(sub.id), None) # 用户设置优先
+        # 剧集播出时间
         if self._calc_time and not minutes\
             and mediainfo.type == MediaType.TV:
             minutes = self.generate_average_time(sub, cal_info)
@@ -517,19 +518,23 @@ class SubscribeCal(_PluginBase):
                 # 数据库会将int类键转换为str
                 data[str(sub.id)] = minutes
                 self.save_data(key="Interval", value=data)
+        # 剧集时长
+        valid_runtimes = self.compute_median_runtime(cal_info)
+        # 剧集总集数
         total_episodes = len(cal_info)
         event_data = self.get_event_data(key=_key) or {}
         for epinfo in cal_info:
             # 跳过无日期剧集
             if not epinfo.air_date: continue
             cal = event_data.get(str(epinfo.id), CalendarEvent())
-            ## 后续可加入jinja2模板引擎
+            # 标题
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
+            runtime = epinfo.runtime or  valid_runtimes
             # 全天事件
             if minutes is not None \
-                and epinfo.runtime:
+                and runtime:
                 # start - airdatetime
-                dtend = epinfo.utc_airdate(minutes + epinfo.runtime)
+                dtend = epinfo.utc_airdate(minutes + runtime)
             else:
                 # 0:00 - 24:00
                 dtend = epinfo.utc_airdate(60 * 24)
@@ -560,9 +565,20 @@ class SubscribeCal(_PluginBase):
             for _, epinfo in event_data.items():
                 date = self.format_date_from_dtstart(epinfo.dtstart)
                 if date in date_range:
-                    groups.setdefault(date, []).append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}))
+                    episode = None
+                    if match := re.search(r"$$(\d+)/\d+$$", epinfo.summary):
+                        episode = int(match.group(1))
+                    groups.setdefault(date, []).append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}, episode=episode))
 
         return groups
+
+    @staticmethod
+    def compute_median_runtime(cal_items: list[CalendarInfo]):
+        try:
+            return statistics.median([item.runtime for item in cal_items if item.runtime])
+        except Exception as e:
+            logger.error(f"获取剧集时长中位数失败: {e}")
+            return None
 
     @staticmethod
     def format_date_from_dtstart(dtstart: str) -> str:
@@ -671,8 +687,8 @@ class SubscribeCal(_PluginBase):
                 method = "密集区间中位数"
             else:
                 # 数据波动较大时，使用加权平均
-                weights = [1.0 - (abs(x - statistics.median(best_cluster)) / 
-                                (max(best_cluster) - min(best_cluster))) 
+                weights = [1.0 - (abs(x - statistics.median(best_cluster)) /
+                                (max(best_cluster) - min(best_cluster)))
                         for x in best_cluster]
                 result = sum(x * w for x, w in zip(best_cluster, weights)) / sum(weights)
                 method = "密集区间加权平均"
