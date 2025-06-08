@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     vue(),
     federation({
-      name: 'FormatDownPath',
+      name: 'NotifyExt',
       filename: 'remoteEntry.js',
       exposes: {
         './Config': './src/components/Config.vue',
