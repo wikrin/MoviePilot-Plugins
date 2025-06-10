@@ -33,11 +33,12 @@
       "name": "订阅日历",
       "description": "根据订阅生成日历, 以供导入至设备日历中",
       "labels": "工具, 订阅",
-      "version": "1.0.9",
+      "version": "1.1.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.1.0": "修复了`访问未赋值变量`的错误",
         "1.0.9": " 修改时间轴颜色方案，添加垂直时间轴滚动",
         "1.0.8": "增加自定义仪表盘宽度",
         "1.0.7": "增加仪表盘, 移除自定义订阅时间, 移除vuetify模式组件",

@@ -236,7 +236,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.0.9"
+    plugin_version = "1.1.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -261,10 +261,6 @@ class SubscribeCal(_PluginBase):
     _dashboard_size: int = 6
 
     def init_plugin(self, config: dict = None):
-        self.downloadhis = DownloadHistoryOper()
-        self.subscribeoper = SubscribeOper()
-        self.tmdbapi = TmdbApi()
-
         # 停止现有任务
         self.stop_service()
         self.load_config(config)
@@ -446,7 +442,7 @@ class SubscribeCal(_PluginBase):
         日历全量更新
         """
         # 获取订阅
-        subs = self.subscribeoper.list()
+        subs = SubscribeOper().list()
         # 暂存key
         _tmp_keys = []
         for sub in subs:
@@ -468,7 +464,7 @@ class SubscribeCal(_PluginBase):
     def sub_add_event(self, event: Event):
         if not event or not self._enabled:
             return
-        if sub := self.subscribeoper.get(event.event_data.get("subscribe_id", None)):
+        if sub := SubscribeOper().get(event.event_data.get("subscribe_id", None)):
             _info = self.serach_sub(sub=sub, cache=False)
             key = self.media_process(sub=sub, mediainfo=_info[0], cal_info=_info[1])
             self.keys.append(key)
@@ -510,14 +506,11 @@ class SubscribeCal(_PluginBase):
         """
         _key = self.get_sub_key(sub)
         # 剧集播出时间
-        if self._calc_time and not minutes\
-            and mediainfo.type == MediaType.TV:
-            minutes = self.generate_average_time(sub, cal_info)
-            if minutes is not None:
-                data = self.get_data(key="Interval") or {}
-                # 数据库会将int类键转换为str
-                data[str(sub.id)] = minutes
-                self.save_data(key="Interval", value=data)
+        minutes = (
+            self.generate_average_time(sub, cal_info)
+            if self._calc_time and mediainfo.type == MediaType.TV
+            else None
+        )
         # 剧集时长
         valid_runtimes = self.compute_median_runtime(cal_info)
         # 剧集总集数
@@ -556,7 +549,7 @@ class SubscribeCal(_PluginBase):
         # 日期范围(最近一周)
         date_range = self.get_date_strings(before_days, after_days)
         # 获取所有订阅
-        subs = self.subscribeoper.list()
+        subs = SubscribeOper().list()
         for sub in subs:
             # 跳过洗版
             if sub.best_version: continue
@@ -712,7 +705,7 @@ class SubscribeCal(_PluginBase):
             return result
 
         # 获取下载记录
-        if histories := [his for his in self.downloadhis.get_last_by(mtype=sub.type, title=sub.name, year=sub.year, # title, year 参数适配v2.4.0-
+        if histories := [his for his in DownloadHistoryOper().get_last_by(mtype=sub.type, title=sub.name, year=sub.year, # title, year 参数适配v2.4.0-
                                                                     season=f"S{str(sub.season).rjust(2, '0')}",
                                                                     tmdbid=sub.tmdbid) if verify_downloadhis_note(his.note)]:
             # 初始化分集更新时间
@@ -777,4 +770,3 @@ class SubscribeCal(_PluginBase):
     @staticmethod
     def get_sub_key(sub: Subscribe) -> str:
         return f"__key_{sub.tmdbid}_{sub.year}_{sub.season}__"
-
