@@ -52,10 +52,13 @@
       "name": "消息通知扩展",
       "description": "拦截设定时间内重复消息，支持按媒体类型/类别进行消息分发",
       "labels": "工具, 消息通知",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
-      "level": 1
+      "level": 1,
+      "history": {
+        "1.1.0": "新增`正则匹配`模式, 支持按正则匹配重新渲染消息"
+      }
     },
     "EnrichWebhook": {
       "name": "Jellyfin报文补充",
