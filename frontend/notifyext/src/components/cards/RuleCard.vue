@@ -50,9 +50,9 @@ const ruleTypeItems = [
 
 // 默认 YAML 内容
 const defaultYamlContent = `
-# extractors 中 除field 外, 其余所有字段都将作为消息模板中的可用参数
+# extractors 中 除field外, 其余所有字段都将作为消息模板中的可用参数
 # MetaBase 如果需要获取媒体信息必须绑定title, 否则消息模板中的可用参数仅有extractors中匹配的字段
-# 详见: https://github.com/wikrin/MoviePilot-Plugins/new/main/frontend/notifyext/README.md
+# 详见: https://github.com/wikrin/MoviePilot-Plugins/blob/main/frontend/notifyext/README.md
 extractors:
   - field: 'title'
     org_msg_title: '.*'
