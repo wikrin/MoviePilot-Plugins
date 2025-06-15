@@ -7,10 +7,16 @@ export interface NotificationRule {
     target: string
     // 配置开关
     enabled: boolean
+    // 规则类型 (可选值: regex, ctype)
+    type: string
+    // YAML 配置
+    yaml_content?: string
     // 媒体类型(None为全部, 可选值: movie, tv)
     media_type?: string
     // 媒体类别
     media_category: Array<string>
+    // 正则模式模板ID
+    Template_id?: string
     // 订阅添加
     subscribeAdded?: string
     // 订阅完成

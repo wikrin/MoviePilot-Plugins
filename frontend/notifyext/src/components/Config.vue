@@ -173,6 +173,7 @@ function addNewRule() {
     id: generateId(),
     name: name,
     enabled: false,
+    type: 'ctype',
     target: '',
     media_type: '',
     media_category: [],

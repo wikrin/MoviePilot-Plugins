@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import type { NotificationRule } from '../../types'
+import type { NotificationRule, templateConf } from '../../types'
 
 const props = defineProps({
   rule: {
@@ -42,6 +42,24 @@ const mediaTypeItems = [
   { title: '电视剧', value: '电视剧' },
 ]
 
+// 媒体类型字典
+const ruleTypeItems = [
+  { title: '内容类型', value: 'ctype' },
+  { title: '正则匹配', value: 'regex' },
+]
+
+// 默认 YAML 内容
+const defaultYamlContent = `
+# extractors 中 除field 外, 其余所有字段都将作为消息模板中的可用参数
+# MetaBase 如果需要获取媒体信息必须绑定title, 否则消息模板中的可用参数仅有extractors中匹配的字段
+# 详见: https://github.com/wikrin/MoviePilot-Plugins/new/main/frontend/notifyext/README.md
+extractors:
+  - field: 'title'
+    org_msg_title: '.*'
+
+MetaBase:
+  - title: ''
+`
 
 function openDialog() {
   editingIndex.value = props.index
@@ -94,6 +112,26 @@ watch(() => editingRule.value.media_type, () => {
 watch(() => props.rule, (newVal) => {
   editingRule.value = { ...newVal }
 })
+
+// 监听 type 变化
+watch(() => editingRule.value.type, (newType, oldType) => {
+  if (!oldType) return
+  if (newType === 'regex' && oldType !== 'regex') {
+    console.log('type changed:', { newType, oldType })
+    editingRule.value.regex = ''
+    editingRule.value.yaml_content = defaultYamlContent
+    const fieldsToClear = ['subscribeAdded', 'subscribeComplete', 'organizeSuccess', 'downloadAdded']
+    // 清空 ctype 模板引用
+    fieldsToClear.forEach(field => {
+      editingRule.value[field] = ''
+    })
+  } else {
+      editingRule.value.yaml_content = ''
+      editingRule.value.template_id = ''
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>
@@ -117,6 +155,14 @@ watch(() => props.rule, (newVal) => {
                   v-model="editingRule.enabled"
                   label="启用规则"
                   inset
+                />
+              </v-col>
+              <v-col cols="12" md="6">
+                <v-select
+                  v-model="editingRule.type"
+                  :items="ruleTypeItems"
+                  label="规则类型"
+                  outlined
                 />
               </v-col>
             </v-row>
@@ -169,9 +215,19 @@ watch(() => props.rule, (newVal) => {
                   outlined
                 />
               </v-col>
+              <!-- 模板ID -->
+              <v-col cols="12" md="6" v-show="editingRule.type === 'regex'">
+                <v-select
+                  v-model="editingRule.template_id"
+                  :items="templates"
+                  label="选择模板"
+                  clearable
+                  outlined
+                />
+              </v-col>
             </v-row>
 
-            <v-row>
+            <v-row v-show="editingRule.type === 'ctype'">
               <!-- 入库成功 -->
               <v-col cols="12" md="6">
                 <v-select
@@ -193,9 +249,6 @@ watch(() => props.rule, (newVal) => {
                   outlined
                 />
               </v-col>
-            </v-row>
-
-            <v-row>
               <!-- 订阅添加 -->
               <v-col cols="12" md="6">
                 <v-select
@@ -217,7 +270,18 @@ watch(() => props.rule, (newVal) => {
                   outlined
                 />
               </v-col>
-          </v-row>
+            </v-row>
+
+            <v-card v-show="editingRule.type === 'regex'">
+              <v-card-title>模板内容</v-card-title>
+              <v-card-text class="py-0">
+                <V-ace-editor
+                  v-model:value="editingRule.yaml_content"
+                  lang="yaml"
+                  class="w-full h-full min-h-[30rem] rounded"
+                />
+              </v-card-text>
+            </v-card>
           </v-form>
         </v-card-text>
         <v-divider></v-divider>

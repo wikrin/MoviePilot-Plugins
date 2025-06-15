@@ -72,21 +72,18 @@ watch(() => props.template, (newVal) => {
                   outlined
                 />
               </v-col>
-
-              <!-- JSON编辑器 -->
-              <v-col cols="12">
-                <v-textarea
-                  v-model="editingTemplate.template"
-                  label="模板内容"
-                  rows="8"
-                  auto-grow
-                  spellcheck="false"
-                  persistent-hint
-                  dense
-                  outlined
-                />
-              </v-col>
             </v-row>
+              <!-- JSON编辑器 -->
+            <v-card>
+              <v-card-title>模板内容</v-card-title>
+              <v-card-text class="py-0">
+                <V-ace-editor
+                  v-model:value="editingTemplate.template"
+                  lang="json"
+                  class="w-full h-full min-h-[30rem] rounded"
+                />
+              </v-card-text>
+            </v-card>
           </v-form>
         </v-card-text>
         <v-divider></v-divider>
