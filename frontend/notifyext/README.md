@@ -63,9 +63,25 @@ extractors:
       内容：
       你下载的种子'(?P<torrent_name>[^']+)'被管理员删除。原因：(?P<reason>.+。)
 
-Aggregate: # 存在即开启
+Aggregate: # 消息聚合存在即开启
   required: ['site_name', 'title', 'torrent_name', 'reason'] # 需要匹配全部字段才会加入消息聚合, 可按场景增删
 ```
+需要增加站点`删种消息` 只需续写`field: 'text'`
+```yaml
+...
+
+  - field: 'text'
+    audiences: |-
+      标题：(?P<title>种子被删除)
+      内容：
+      你下载的种子'(?P<torrent_name>[^']+)'被管理员删除。原因：(?P<reason>.+。)
+
+    xxxxx: |-
+      标题...
+      ...
+...
+```
+
 消息渲染模板
 ```json
 {
