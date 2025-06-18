@@ -11,20 +11,8 @@ export interface NotificationRule {
     type: string
     // YAML 配置
     yaml_content?: string
-    // 媒体类型(None为全部, 可选值: movie, tv)
-    media_type?: string
-    // 媒体类别
-    media_category: Array<string>
-    // 正则模式模板ID
+    // 模板ID
     Template_id?: string
-    // 订阅添加
-    subscribeAdded?: string
-    // 订阅完成
-    subscribeComplete?: string
-    // 入库成功
-    organizeSuccess?: string
-    // 下载添加
-    downloadAdded?: string
 }
 
 export interface templateConf {

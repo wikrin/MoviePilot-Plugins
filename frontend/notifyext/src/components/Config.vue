@@ -53,7 +53,7 @@ async function loadNotificationSetting() {
   }
 }
 
-// 调用API获取消息通知分发规则
+// 调用API获取消息通知规则
 async function loadNotificationRule() {
   try {
     const result = await props.api.get('plugin/NotifyExt/rules')
@@ -147,16 +147,7 @@ const templateOptions = computed(() => {
   })
 })
 
-// 二级分类策略
-const mediaCategories = ref<{ [key: string]: any }>({})
-// 调用API查询自动分类配置
-async function loadMediaCategories() {
-  try {
-    mediaCategories.value = await props.api.get('media/category')
-  } catch (error) {
-    console.log(error)
-  }
-}
+
 // 生成唯一ID
 function generateId() {
   return uuidv4();
@@ -173,10 +164,8 @@ function addNewRule() {
     id: generateId(),
     name: name,
     enabled: false,
-    type: 'ctype',
+    type: 'regex',
     target: '',
-    media_type: '',
-    media_category: [],
   });
 }
 
@@ -292,8 +281,6 @@ onMounted(() => {
   }
   // 加载通知渠道设置
   loadNotificationSetting()
-  // 加载自动分类配置
-  loadMediaCategories()
   // 加载消息模板
   loadNotificationTemplate()
   // 加载消息通知分发规则
@@ -357,7 +344,7 @@ onMounted(() => {
           <v-card flat class="rounded mb-3 border config-card">
             <v-card-text class="px-3 py-2">
               <v-tabs v-model="activeTab" class="mb-3" density="compact" fixed-tabs>
-                <v-tab value="rules">分发规则</v-tab>
+                <v-tab value="rules">消息规则</v-tab>
                 <v-tab value="templates">消息模板</v-tab>
               </v-tabs>
 
@@ -377,7 +364,6 @@ onMounted(() => {
                           :rule="rule"
                           :index="index"
                           :source-options="sourceOptions"
-                          :categories="mediaCategories"
                           :rules="rules"
                           :templates="templateOptions"
                           @alert="showNotification"
@@ -390,7 +376,7 @@ onMounted(() => {
                     <v-row v-else>
                       <v-col cols="12">
                         <v-alert type="info" variant="tonal" icon="mdi-information">
-                          暂无分发规则，请点击下方按钮添加新规则
+                          暂无规则，请点击下方按钮添加新规则
                         </v-alert>
                       </v-col>
                     </v-row>
