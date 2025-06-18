@@ -7,7 +7,7 @@ export interface NotificationRule {
     target: string
     // 配置开关
     enabled: boolean
-    // 规则类型 (可选值: regex, ctype)
+    // 规则类型
     type: string
     // YAML 配置
     yaml_content?: string

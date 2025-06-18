@@ -129,12 +129,13 @@ resolveConfirm(false)
 
 // 计算消息渠道选项
 const sourceOptions = computed(() => {
-  return notifications.value.map(item => {
-    return {
+  return [
+    { title: '跟随系统', value: '' },
+    ...notifications.value.map(item => ({
       title: `${item.name}-${item.type}`,
       value: item.name,
-    }
-  })
+    })),
+  ]
 })
 
 // 计算消息模板选项
@@ -164,7 +165,7 @@ function addNewRule() {
     id: generateId(),
     name: name,
     enabled: false,
-    type: 'regex',
+    type: 'organizeSuccess',
     target: '',
   });
 }

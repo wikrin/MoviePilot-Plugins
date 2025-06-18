@@ -81,10 +81,10 @@ function save() {
     return
   }
 
-  if (!editingRule.value.target) {
-    emit('alert', '未设置消息渠道', 'error')
-    return
-  }
+  // if (!editingRule.value.target) {
+  //   emit('alert', '未设置消息渠道', 'error')
+  //   return
+  // }
 
 emit('save', editingRule.value, editingIndex.value)
   showDialog.value = false

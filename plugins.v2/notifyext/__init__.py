@@ -2,7 +2,8 @@
 import copy
 import datetime
 import re
-from typing import Any, Optional, Tuple, Dict, List, Union
+import threading
+from typing import Any, Optional, Tuple, Dict, List
 
 # 第三方库
 from pydantic import BaseModel
@@ -40,7 +41,7 @@ class NotificationRule(BaseModel):
     target: str
     # 配置开关
     enabled: bool = False
-    # 规则类型 (可选值: regex, ctype)
+    # 规则类型
     type: Optional[str] = None
     # YAML 配置
     yaml_content: Optional[str] = None
@@ -75,7 +76,7 @@ class MessageAggregator(metaclass=SingletonClass):
         self._scheduler = plugin._scheduler
         self._restore_state()
 
-    def add_message(self, rule: NotificationRule, message: Notification, context: dict) -> bool:
+    def add_message(self, rule: NotificationRule, message: Notification, context: dict):
         now = datetime.datetime.now().isoformat()
         if not self._messages:
             self._start_check_task()
@@ -91,13 +92,12 @@ class MessageAggregator(metaclass=SingletonClass):
         group = self._messages[rule.id]
         group.messages.append(context)
         group.last_time = now
+        logger.info(f"{message} 已添加至消息组")
 
-        return True
-
-    def _send_group(self, rule_id: str) -> bool:
-        group = self._messages.pop(rule_id)
+    def _send_group(self, rule_id: str):
+        group = self._messages.get(rule_id)
         if not group.messages:
-            return False
+            return
 
         merged = {
             "count": len(group.messages),
@@ -106,14 +106,17 @@ class MessageAggregator(metaclass=SingletonClass):
             "last_time": group.last_time,
         }
 
-        self._save_state()
-        if not self._messages:
-            self.stop_check_task()
         # 渲染消息
         if message := self.plugin.rendered_message(group.rule, merged, group.message):
-            logger.info(f"发送聚合消息: {rule_id}")
+            logger.info(f"发送 {group.rule.name} 聚合消息")
             self.plugin.post_message(**message.dict())
-        return True
+            # 删除消息
+            self._messages.pop(rule_id)
+            # 保存状态
+            self._save_state()
+
+        if not self._messages:
+            self._scheduler.remove_job("check_aggregate_messages")
 
     def _save_state(self):
         state = {k: v.dict() for k, v in self._messages.items()}
@@ -125,6 +128,8 @@ class MessageAggregator(metaclass=SingletonClass):
             return
         for rule_id, group_data in state.items():
             self._messages[rule_id] = MessageGroup(**group_data)
+        if self._messages:
+            self._start_check_task()
 
     def _start_check_task(self):
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -147,7 +152,6 @@ class MessageAggregator(metaclass=SingletonClass):
 
     def _check_expired_groups(self):
         if not self._messages:
-            self.stop_check_task()
             return
 
         now = datetime.datetime.now()
@@ -159,176 +163,6 @@ class MessageAggregator(metaclass=SingletonClass):
                 self._send_group(rule_id)
 
 
-class MessageProcessor(metaclass=SingletonClass):
-    """消息处理器"""
-
-    def __init__(self, plugin: 'NotifyExt'):
-        self.plugin = plugin
-        self.recognize_media = plugin.chain.recognize_media
-
-    def process(self, message: Notification) -> list[Tuple[dict, NotificationRule]]:
-        results = []
-
-        for rule in self.plugin.get_rules():
-            if not rule.enabled:
-                continue
-
-            if message.ctype and rule.type == message.ctype:
-                logger.info(f"匹配到 ctype 规则: {rule.name}")
-                result = self._handle_basic_type(message, rule)
-
-            elif not message.ctype and rule.type == "regex":
-                logger.info(f"匹配到 regex 规则: {rule.name}")
-                result = self._handle_regex_type(message, rule)
-            else:
-                continue
-            if isinstance(result, tuple):
-                results.append(result)
-            elif isinstance(result, bool):
-                # 消息合并直接返回结果
-                return result
-
-        return results
-
-    def _handle_basic_type(self, message: Notification, rule: NotificationRule) -> Tuple[dict, NotificationRule]:
-        context = TemplateHelper().get_cache_context(message.to_dict())
-        return context, rule
-
-    def _handle_regex_type(self, message: Notification, rule: NotificationRule) -> Optional[Union[Tuple[dict, NotificationRule], bool]]:
-                # 正则匹配消息内容
-        if rule.type != "regex":
-            return None
-        if not rule.yaml_content:
-            logger.warn("rule yaml is empty")
-            return None
-        if not rule.template_id:
-            logger.warn("rule template_id is empty")
-            return None
-        # 加载yaml
-        yaml: CommentedMap = self._load_yaml_content(rule.yaml_content)
-        # 获取提取器
-        extractors = yaml.get("extractors")
-        # 获取元数据字段
-        meta_fields = self._extract_meta_fields(yaml)
-        # 获取聚合配置
-        aggregate: dict = yaml.get("Aggregate")
-        if not extractors:
-            logger.warn("rule extractors is empty")
-            return None
-        context = self._extract_fields(message, extractors)
-        # 过滤掉meta属性字段
-        if meta_fields:
-            try:
-                meta = self._create_meta_instance(fields=meta_fields, context=context)
-                mediainfo = self.recognize_media(meta=meta)
-                if mediainfo:
-                    # 删除meta属性字段
-                    context = {k: v for k, v in context.items() if k not in meta_fields}
-                context = TemplateHelper().builder.build(meta=meta, mediainfo=mediainfo, include_raw_objects=False, **context)
-            except Exception as e:
-                logger.warn(f"Failed to create meta instance: {e}")
-
-        if aggregate:
-            required = aggregate.get("required", [])
-            if all(field in context for field in required):
-                return MessageAggregator().add_message(rule, message, context)
-
-        return context, rule
-
-
-    @staticmethod
-    def _load_yaml_content(yaml_content) -> dict:
-        if not yaml_content:
-            return {}
-        yaml = YAML()
-        try:
-            return yaml.load(yaml_content)
-        except YAMLError as e:
-            logger.error(f"YAML 解析失败: {e}")
-            return {}
-        except Exception as e:
-            logger.error(f"[ERROR] 未知错误: {e}")
-            return {}
-
-    @staticmethod
-    def _extract_fields(message: Notification, extractors: List[dict]) -> dict:
-        if not isinstance(extractors, list):
-            return {}
-
-        context = {}
-        for extractor in extractors:
-            field = extractor.get("field")
-            if not field:
-                continue
-
-            raw_value = getattr(message, field, None)
-            if not raw_value:
-                continue
-
-            text = str(raw_value)
-            for key, pattern in extractor.items():
-                if key == "field":
-                    continue
-                try:
-                    match = re.search(pattern, text)
-                    if match:
-                        if match.groupdict():
-                            context.update(match.groupdict())
-                        elif match.lastindex == 1:
-                            context[key] = match.group(1)
-                        else:
-                            context[key] = match.group()
-                except re.error as e:
-                    logger.warn(f"正则表达式无效: {pattern}, 错误: {e}")
-
-        return context
-
-    @staticmethod
-    def _extract_meta_fields(yaml_data: dict) -> dict:
-        if not isinstance(yaml_data, dict):
-            return {}
-
-        meta_fields = yaml_data.get("MetaBase")
-        if not isinstance(meta_fields, dict):
-            return {}
-
-        return {
-            k: v for k, v in meta_fields.items()
-            if k and v is not None and not isinstance(v, type(None))
-        }
-
-    @staticmethod
-    def _create_meta_instance(fields: Dict[str, str], context: Dict) -> Optional[MetaBase]:
-        if not isinstance(fields, dict) or not isinstance(context, dict):
-            return None
-
-        title_key = fields.get('title')
-        if not title_key or not context.get(title_key):
-            return None
-
-        meta = MetaInfo(
-            title=context[title_key],
-            subtitle=context.get(fields.get('subtitle'))
-        )
-
-        def map_type(value_key):
-            value = context.get(value_key)
-            return MediaType.MOVIE if value in ("movie", "电影") else MediaType.TV
-
-        field_mapping = {"type": map_type}
-
-        for key, value_key in fields.items():
-            if key in ['title', 'subtitle']:
-                continue
-
-            if key in field_mapping:
-                setattr(meta, key, field_mapping[key](value_key))
-            elif (value := context.get(value_key)) is not None:
-                setattr(meta, key, value)
-
-        return meta
-
-
 class NotifyExt(_PluginBase):
     # 插件名称
     plugin_name = "消息通知扩展"
@@ -337,7 +171,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -351,6 +185,8 @@ class NotifyExt(_PluginBase):
 
     # 私有属性
     _scheduler = None
+    _local = threading.local()
+
     _rules_key: str = "notifyext_rules"
     _templates_key: str = "notifyext_templates"
     _rules: list[NotificationRule] = []
@@ -363,11 +199,9 @@ class NotifyExt(_PluginBase):
     def init_plugin(self, config: dict = None):
         self.messagequeue = MessageQueueManager()
         self.aggregator = MessageAggregator(self, 2)
-        self.processor = MessageProcessor(self)
-        self.load_config(config)
+
         self._rules = self.get_rules()
         self._templates = self.get_templates()
-
 
         # 停止现有任务
         self.stop_service()
@@ -433,75 +267,6 @@ class NotifyExt(_PluginBase):
             },
         ]
 
-    def get_command(self):
-        pass
-
-    def get_form(self):
-        return [], {}
-
-    def get_page(self):
-        pass
-
-    def get_state(self):
-        return self._enabled
-
-    @staticmethod
-    def get_render_mode() -> Tuple[str, Optional[str]]:
-        """
-        获取插件渲染模式
-        :return: 1、渲染模式，支持：vue/vuetify，默认vuetify；2、vue模式下编译后文件的相对路径，默认为`dist/assets`，vuetify模式下为None
-        """
-        return "vue", "dist/assets"
-
-    def get_module(self) -> Dict[str, Any]:
-        """
-        获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
-        """
-        return {"post_message": self.format_message}
-
-    def format_message(self, message: Notification, notifyext: bool = False, *args, **kwargs):
-        if notifyext:
-            return None
-        if message.channel or message.source:
-            return None
-
-        if message.mtype and self.is_within_notification_cooldown(message):
-            return False
-
-        results = self.processor.process(message) or None
-        if not results or isinstance(results, bool):
-            return results
-
-        sent_any = None
-        for context, rule in results:
-            if msg := self.rendered_message(rule, context, message):
-                self.messagequeue.send_message("post_message", message=msg, notifyext=True, *args, **kwargs)
-                sent_any = True
-
-        return sent_any
-
-    def rendered_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> Optional[Notification]:
-        template_content = TemplateHelper().parse_template_content(self._templates.get(rule.template_id), template_type="literal")
-        if not template_content:
-            logger.error(f"模板 {rule.template_id} 不存在")
-            return None
-        # 避免引用修改源数据
-        msg = copy.deepcopy(message) if message else Notification()
-        rendered = TemplateHelper().render_with_context(template_content, context)
-        if not rendered:
-            logger.warning(f"模板 {rule.template_id} 渲染失败")
-            return None
-        rendered = TemplateHelper()._TemplateHelper__process_formatted_string(rendered)
-
-        if isinstance(rendered, dict):
-            for key, value in rendered.items():
-                if value and hasattr(msg, key):
-                    setattr(msg, key, value)
-
-            msg.source = rule.target
-            return msg
-        return None
-
     def templates(self) -> list[TemplateConf]:
         templates = self.get_data(key=self._templates_key) or []
         return [TemplateConf(**t) for t in templates]
@@ -535,6 +300,233 @@ class NotifyExt(_PluginBase):
                 logger.info(f"上次发送消息 {cooldown_minutes} 分钟前, 跳过此次发送。")
                 return True
         return False
+
+    def get_command(self):
+        pass
+
+    def get_form(self):
+        return [], {}
+
+    def get_page(self):
+        pass
+
+    def get_state(self):
+        return self._enabled
+
+    @staticmethod
+    def get_render_mode() -> Tuple[str, Optional[str]]:
+        """
+        获取插件渲染模式
+        :return: 1、渲染模式，支持：vue/vuetify，默认vuetify；2、vue模式下编译后文件的相对路径，默认为`dist/assets`，vuetify模式下为None
+        """
+        return "vue", "dist/assets"
+
+    def get_module(self) -> Dict[str, Any]:
+        """
+        获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
+        """
+        return {"post_message": self.on_post_message}
+
+    def on_post_message(self, message: Notification):
+        if getattr(type(self)._local, "flag", False):
+            return None
+
+        if message.mtype and self.is_within_notification_cooldown(message):
+            return False
+
+        return self.handle_message(message)
+
+    def rendered_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> Optional[Notification]:
+        _template = self._templates.get(rule.template_id)
+        if not _template:
+            logger.error(f"模板 {rule.template_id} 不存在")
+            return None
+        template_content = TemplateHelper().parse_template_content(_template, template_type="literal")
+        # 避免引用修改源数据
+        msg = copy.deepcopy(message) if message else Notification()
+        logger.info(f"规则：{rule.name} 开始通过模板渲染消息")
+        rendered = TemplateHelper().render_with_context(template_content, context)
+        if not rendered:
+            return None
+        rendered = TemplateHelper()._TemplateHelper__process_formatted_string(rendered)
+
+        if isinstance(rendered, dict):
+            for key, value in rendered.items():
+                if value and hasattr(msg, key):
+                    setattr(msg, key, value)
+
+            msg.source = rule.target
+            return msg
+        return None
+
+    def handle_message(self, message: Notification) -> Optional[bool]:
+
+        sent_any = None
+
+        for rule in self._rules:
+            if not rule.enabled:
+                continue
+
+            if message.ctype and rule.type == message.ctype.value:
+                result = self._handle_basic_type(message, rule)
+
+            elif not message.ctype and rule.type == "regex":
+                result = self._handle_regex_type(message, rule)
+            else:
+                continue
+
+            if result is None:
+                return False
+
+            elif not result:
+                continue
+
+            if msg := self.rendered_message(rule, result, message):
+                try:
+                    type(self)._local.flag = True
+                    self.messagequeue.send_message("post_message", message=msg)
+                    sent_any = True
+                finally:
+                    if hasattr(type(self)._local, "flag"):
+                        del type(self)._local.flag
+
+        return sent_any
+
+    def _handle_basic_type(self, message: Notification, rule: NotificationRule) -> dict:
+        return TemplateHelper().get_cache_context(message.to_dict()) or {}
+
+    def _handle_regex_type(self, message: Notification, rule: NotificationRule) -> Optional[dict]:
+
+        if not rule.yaml_content:
+           return {}
+        # 加载yaml
+        yaml: CommentedMap = self._load_yaml_content(rule.yaml_content)
+        # 获取提取器
+        extractors = yaml.get("extractors")
+        # 获取元数据字段
+        meta_fields = self._extract_meta_fields(yaml)
+        # 获取聚合配置
+        aggregate: dict = yaml.get("Aggregate")
+        if not extractors:
+            logger.warn("rule extractors is empty")
+            return {}
+        context = self._extract_fields(message, extractors)
+        # 过滤掉meta属性字段
+        if meta_fields:
+            try:
+                meta = self._create_meta_instance(fields=meta_fields, context=context)
+                mediainfo = self.chain.recognize_media(meta=meta)
+                if mediainfo:
+                    # 删除meta属性字段
+                    context = {k: v for k, v in context.items() if k not in meta_fields}
+                context = TemplateHelper().builder.build(meta=meta, mediainfo=mediainfo, include_raw_objects=False, **context)
+            except Exception as e:
+                logger.warn(f"Failed to create meta instance: {e}")
+
+        if aggregate:
+            required = aggregate.get("required", [])
+            if all(field in context for field in required):
+                logger.info(f"命中规则: {rule.name}")
+                return MessageAggregator().add_message(rule, message, context)
+            else:
+                return {}
+        logger.info(f"命中规则: {rule.name}")
+        return context
+
+
+    @staticmethod
+    def _load_yaml_content(yaml_content) -> dict:
+        if not yaml_content:
+            return {}
+        yaml = YAML()
+        try:
+            return yaml.load(yaml_content)
+        except YAMLError as e:
+            logger.error(f"YAML 解析失败: {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"[ERROR] 未知错误: {e}")
+            return {}
+
+    @staticmethod
+    def _extract_fields(message: Notification, extractors: List[dict]) -> dict:
+        if not isinstance(extractors, list):
+            return {}
+
+        context = {}
+        for extractor in extractors:
+            field = extractor.get("field")
+            if not field:
+                continue
+
+            raw_value = getattr(message, field, None)
+            if not raw_value:
+                continue
+
+            text = str(raw_value)
+            logger.debug(f"文本内容: {text}")
+            for key, pattern in extractor.items():
+                if key == "field":
+                    continue
+                try:
+                    match = re.search(pattern, text)
+                    logger.debug(f"pattern: `{pattern}` → match: {match}")
+                    if match:
+                        if match.groupdict():
+                            context.update(match.groupdict())
+                        elif match.lastindex == 1:
+                            context[key] = match.group(1)
+                        else:
+                            context[key] = match.group()
+                except re.error as e:
+                    logger.warn(f"正则表达式无效: {pattern}, 错误: {e}")
+
+        return context
+
+    @staticmethod
+    def _extract_meta_fields(yaml_data: dict) -> dict:
+        if not isinstance(yaml_data, dict):
+            return {}
+
+        meta_fields = yaml_data.get("MetaBase")
+        if not isinstance(meta_fields, dict):
+            return {}
+
+        return {
+            k: v for k, v in meta_fields.items()
+            if k and v is not None and not isinstance(v, type(None))
+        }
+
+    @staticmethod
+    def _create_meta_instance(fields: Dict[str, str], context: Dict) -> Optional[MetaBase]:
+        if not isinstance(fields, dict) or not isinstance(context, dict):
+            return None
+
+        title_key = fields.get('title')
+        if not title_key or not context.get(title_key):
+            return None
+
+        meta = MetaInfo(
+            title=context[title_key],
+            subtitle=context.get(fields.get('subtitle'))
+        )
+
+        def map_type(value_key):
+            value = context.get(value_key)
+            return MediaType.MOVIE if value in ("movie", "电影") else MediaType.TV
+
+        field_mapping = {"type": map_type}
+
+        for key, value_key in fields.items():
+            if key in ['title', 'subtitle']:
+                continue
+
+            if key in field_mapping:
+                setattr(meta, key, field_mapping[key](value_key))
+            elif (value := context.get(value_key)) is not None:
+                setattr(meta, key, value)
+
+        return meta
 
     @staticmethod
     @db_query
