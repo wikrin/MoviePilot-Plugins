@@ -50,13 +50,14 @@
     },
     "NotifyExt": {
       "name": "消息通知扩展",
-      "description": "拦截设定时间内重复消息，支持按媒体类型/类别进行消息分发",
+      "description": "拦截设定时间内重复消息，根据规则聚合/分发消息",
       "labels": "工具, 消息通知",
-      "version": "1.1.0",
+      "version": "2.0.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "2.0.0": "新增消息聚合, 移除多余配置项, 此次升级不兼容1.1.0",
         "1.1.0": "新增`正则匹配`模式, 支持按正则匹配重新渲染消息"
       }
     },
