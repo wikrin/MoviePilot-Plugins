@@ -22,10 +22,6 @@ MoviePilot 消息通知扩展插件用于增强系统消息通知功能，支持
 > 目标渠道
 > - 消息发往何处
 
-> 规则类型
-> - 内容类型: 仅处理`资源入库` `资源下载` `添加订阅` `订阅完成`
-> - 正则匹配: 在YAML中编辑匹配规则
-
 ### 🌰 正则模式使用示例:
 
 `extractors` 中定义需要提取的信息, 例如
@@ -51,5 +47,49 @@ MetaBase:
 可绑定`tmdbid`精准识别
 更多`MetaBase`属性见[MetaInfo](https://github.com/jxxghp/MoviePilot/blob/fcd5ca3fda1992ece6bb2111afa1b75909d0557f/app/schemas/context.py#L6-L61)
 
+### 消息聚合:
+
+下面以`观众` 删种的`站点消息`为例:
+
+规则YAML模板
+```yaml
+extractors:
+  - field: 'title'
+    site_name: '【站点\s+([^\s]+)\s+消息】' # 提取站点名称
+
+  - field: 'text'
+    audiences: |-
+      标题：(?P<title>种子被删除)
+      内容：
+      你下载的种子'(?P<torrent_name>[^']+)'被管理员删除。原因：(?P<reason>.+。)
+
+Aggregate: # 存在即开启
+  required: ['site_name', 'title', 'torrent_name', 'reason'] # 需要匹配全部字段才会加入消息聚合, 可按场景增删
+```
+消息渲染模板
+```json
+{
+    "title": "📢 站点消息通知",
+    "text": (
+        "───────────────\n"
+        "{%- set sites = {} -%}"
+        "{%- for msg in messages -%}"
+        "{%- if msg.site_name and msg.reason -%}"
+        "{%- set _ = sites.update({msg.site_name: msg.reason}) -%}"
+        "{%- endif -%}"
+        "{%- endfor -%}"
+        "{%- for site, reason in sites.items() %}\n"
+        "*🔹 站点：{{ site }}*\n"
+        "🔸 原因：{{ reason }}\n"
+        "{%- for msg in messages if msg.site_name == site %}\n"
+        "➤ *{{ msg.torrent_name }}*"
+        "{%- endfor -%}"
+        "\n───────────────"
+        "{%- if not loop.last %}\n{% endif -%}"
+        "{%- endfor -%}\n"
+        "⏰ 统计时间：{{ last_time | truncate(16, True, '') }}"
+    )
+}
+```
 ## 📝 注意事项
 1. 正则表达式规则请确保格式正确
