@@ -18,6 +18,7 @@ from app.db.models.message import Message
 from app.helper.message import MessageQueueManager, TemplateHelper
 from app.log import logger
 from app.plugins import _PluginBase
+from app.scheduler import Scheduler, BackgroundScheduler, JobLookupError
 from app.schemas.message import Notification
 from app.schemas.types import MediaType
 from app.utils.singleton import SingletonClass
@@ -52,6 +53,7 @@ class NotificationRule(BaseModel):
 class MessageGroup(BaseModel):
     """消息组"""
     rule: NotificationRule
+    send_in: float = 2
     message: Notification
     first_time: str
     last_time: str
@@ -73,25 +75,26 @@ class MessageAggregator(metaclass=SingletonClass):
         self.plugin = plugin
         self.window = window
         self._messages: Dict[str, MessageGroup] = {}
-        self._scheduler = plugin._scheduler
+        self.scheduler = Scheduler()
+        self._scheduler: BackgroundScheduler = self.scheduler._scheduler
         self._restore_state()
 
-    def add_message(self, rule: NotificationRule, message: Notification, context: dict):
-        now = datetime.datetime.now().isoformat()
-        if not self._messages:
-            self._start_check_task()
-
+    def add_message(self, rule: NotificationRule, message: Notification, context: dict, send_in: float):
+        now = datetime.datetime.now()
         if rule.id not in self._messages:
             self._messages[rule.id] = MessageGroup(
                 rule=rule,
+                send_in=send_in,
                 message=message,
-                first_time=now,
-                last_time=now,
+                first_time=now.isoformat(),
+                last_time=now.isoformat(),
             )
+            run_time = now + datetime.timedelta(hours=send_in)
+            self.add_job(rule=rule, run_time=run_time)
 
         group = self._messages[rule.id]
         group.messages.append(context)
-        group.last_time = now
+        group.last_time = now.isoformat()
         logger.info(f"{message} 已添加至消息组")
 
     def _send_group(self, rule_id: str):
@@ -101,7 +104,7 @@ class MessageAggregator(metaclass=SingletonClass):
 
         merged = {
             "count": len(group.messages),
-            "messages": [msg for msg in group.messages],
+            "messages": list(group.messages),
             "first_time": group.first_time,
             "last_time": group.last_time,
         }
@@ -110,13 +113,12 @@ class MessageAggregator(metaclass=SingletonClass):
         if message := self.plugin.rendered_message(group.rule, merged, group.message):
             logger.info(f"发送 {group.rule.name} 聚合消息")
             self.plugin.post_message(**message.dict())
+            # 移除任务
+            self.remove_job(rule_id)
             # 删除消息
             self._messages.pop(rule_id)
             # 保存状态
             self._save_state()
-
-        if not self._messages:
-            self._scheduler.remove_job("check_aggregate_messages")
 
     def _save_state(self):
         state = {k: v.dict() for k, v in self._messages.items()}
@@ -129,39 +131,62 @@ class MessageAggregator(metaclass=SingletonClass):
         for rule_id, group_data in state.items():
             self._messages[rule_id] = MessageGroup(**group_data)
         if self._messages:
-            self._start_check_task()
+            now = datetime.datetime.now()
+            for group in self._messages.values():
+                send_time = datetime.datetime.fromisoformat(group.first_time) + datetime.timedelta(hours=group.send_in)
+                if send_time > now:
+                    # 超时直接发送
+                    self._send_group(group.rule.id)
+                else:
+                    self.add_job(group.rule, send_time)
 
-    def _start_check_task(self):
-        from apscheduler.schedulers.background import BackgroundScheduler
-        self._scheduler = BackgroundScheduler()
+    def add_job(self, rule: NotificationRule, run_time: datetime.datetime):
+
+        # 添加后台任务
+        self.scheduler._jobs[rule.id] = {
+            "func": self._send_group,
+            "name": f"发送 {rule.name} 消息组",
+            "id": rule.id,
+            "provider_name": self.plugin.plugin_name,
+            "kwargs": {"rule_id": rule.id},
+            "running": False,
+        }
         self._scheduler.add_job(
-            func=self._check_expired_groups,
-            trigger='interval',
-            minutes=10,
-            id='check_aggregate_messages',
-            name="aggregate_check",
+            func=self._send_group,
+            trigger='date',
+            run_date=run_time,
+            id=rule.id,
+            name=f"发送 {rule.name} 消息组",
+            kwargs={"rule_id": rule.id},
         )
-        self._scheduler.start()
-        logger.info("启动消息检查任务")
 
-    def stop_check_task(self):
-        self._save_state()
-        self._scheduler.shutdown()
-        self._scheduler = None
-        logger.info("停止消息检查任务")
+    def remove_job(self, rule_id: str):
+        if not (group := self._messages.get(rule_id, None)):
+            return
+        try:
+            rule_name = group.rule.name
+            # 删除定时任务
+            self.scheduler._jobs.pop(rule_id, None)
+            # 移除调度器任务
+            self._scheduler.remove_job(rule_id)
+            logger.info(f"停止规则 {rule_name} 消息组后台任务")
 
-    def _check_expired_groups(self):
+        except JobLookupError:
+            pass
+
+        except Exception as e:
+            logger.error(f"规则 {rule_name} 后台任务 停止失败：{e}")
+
+    @property
+    def has_active_tasks(self):
+        return bool(self._messages)
+
+    def stop_task(self):
         if not self._messages:
             return
-
-        now = datetime.datetime.now()
-        for rule_id in list(self._messages.keys()):
-            group = self._messages[rule_id]
-            if (
-                now - datetime.datetime.fromisoformat(group.first_time)
-            ).total_seconds() >= self.window * 3600:
-                self._send_group(rule_id)
-
+        self._save_state()
+        for rule_id in self._messages.keys():
+            self.remove_job(rule_id)
 
 class NotifyExt(_PluginBase):
     # 插件名称
@@ -171,7 +196,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.0.1"
+    plugin_version = "2.0.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -184,7 +209,6 @@ class NotifyExt(_PluginBase):
     auth_level = 1
 
     # 私有属性
-    _scheduler = None
     _local = threading.local()
 
     _rules_key: str = "notifyext_rules"
@@ -226,8 +250,8 @@ class NotifyExt(_PluginBase):
     def stop_service(self):
         """退出插件"""
         try:
-            if self._scheduler:
-                self.aggregator.stop_check_task()
+            if self.aggregator.has_active_tasks:
+                self.aggregator.stop_task()
         except Exception as e:
             logger.error(f"退出插件失败：{str(e)}")
 
@@ -426,8 +450,10 @@ class NotifyExt(_PluginBase):
         if aggregate:
             required = aggregate.get("required", [])
             if all(field in context for field in required):
+                # 发送延迟
+                send_on = aggregate.get("send_on", 2)
                 logger.info(f"命中规则: {rule.name}")
-                return MessageAggregator().add_message(rule, message, context)
+                return MessageAggregator().add_message(rule, message, context, send_on)
             else:
                 return {}
         logger.info(f"命中规则: {rule.name}")
@@ -541,4 +567,3 @@ class NotifyExt(_PluginBase):
         except Exception as e:
             logger.error(f"获取message记录失败: {str(e)}")
             return None
-
