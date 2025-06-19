@@ -202,7 +202,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.0.3"
+    plugin_version = "2.0.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -260,10 +260,20 @@ class NotifyExt(_PluginBase):
     def stop_service(self):
         """退出插件"""
         try:
-            if self.aggregator.has_active_tasks:
+            if self.need_stop:
                 self.aggregator.stop_task()
         except Exception as e:
             logger.error(f"退出插件失败：{str(e)}")
+
+    @property
+    def need_stop(self) -> bool:
+        """
+        判断插件是否需要退出
+        """
+        try:
+            return self.aggregator.has_active_tasks
+        except Exception:
+            return False
 
     def get_api(self) -> List[Dict[str, Any]]:
         return [
