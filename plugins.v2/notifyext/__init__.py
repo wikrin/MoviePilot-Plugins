@@ -71,12 +71,10 @@ class MessageGroup(BaseModel):
 class MessageAggregator(metaclass=SingletonClass):
     """消息聚合器"""
 
-    def __init__(self, plugin: 'NotifyExt', window: int):
+    def __init__(self, plugin: 'NotifyExt'):
         self.plugin = plugin
-        self.window = window
         self._messages: Dict[str, MessageGroup] = {}
-        self.scheduler = Scheduler()
-        self._scheduler: BackgroundScheduler = self.scheduler._scheduler
+        self._scheduler: BackgroundScheduler = Scheduler()._scheduler
         self._restore_state()
 
     def add_message(self, rule: NotificationRule, message: Notification, context: dict, send_in: float):
@@ -95,6 +93,7 @@ class MessageAggregator(metaclass=SingletonClass):
         group = self._messages[rule.id]
         group.messages.append(context)
         group.last_time = now.isoformat()
+
         logger.info(f"{message} 已添加至消息组")
 
     def _send_group(self, rule_id: str):
@@ -130,34 +129,39 @@ class MessageAggregator(metaclass=SingletonClass):
             return
         for rule_id, group_data in state.items():
             self._messages[rule_id] = MessageGroup(**group_data)
-        if self._messages:
-            now = datetime.datetime.now()
-            for group in self._messages.values():
-                send_time = datetime.datetime.fromisoformat(group.first_time) + datetime.timedelta(hours=group.send_in)
-                if send_time > now:
-                    # 超时直接发送
-                    self._send_group(group.rule.id)
-                else:
-                    self.add_job(group.rule, send_time)
+        if not self._messages:
+            return
+        now = datetime.datetime.now()
+        for group in self._messages.values():
+            send_time = datetime.datetime.fromisoformat(group.first_time) + datetime.timedelta(hours=group.send_in)
+            if send_time < now:
+                # 超时延迟发送
+                _send_time = now + datetime.timedelta(minutes=5)
+                self.add_job(group.rule, _send_time)
+            else:
+                self.add_job(group.rule, send_time)
 
     def add_job(self, rule: NotificationRule, run_time: datetime.datetime):
-
-        # 添加后台任务
-        self.scheduler._jobs[rule.id] = {
+        if not self._scheduler:
+            return
+        # 任务信息
+        job_info = {
             "func": self._send_group,
             "name": f"发送 {rule.name} 消息组",
             "id": rule.id,
-            "provider_name": self.plugin.plugin_name,
             "kwargs": {"rule_id": rule.id},
+        }
+        # 添加服务
+        Scheduler()._jobs[rule.id] = {
+            **job_info,
+            "provider_name": self.plugin.plugin_name,
             "running": False,
         }
+        # 添加任务
         self._scheduler.add_job(
-            func=self._send_group,
-            trigger='date',
+            **job_info,
+            trigger="date",
             run_date=run_time,
-            id=rule.id,
-            name=f"发送 {rule.name} 消息组",
-            kwargs={"rule_id": rule.id},
         )
 
     def remove_job(self, rule_id: str):
@@ -166,10 +170,11 @@ class MessageAggregator(metaclass=SingletonClass):
         try:
             rule_name = group.rule.name
             # 删除定时任务
-            self.scheduler._jobs.pop(rule_id, None)
+            Scheduler()._jobs.pop(rule_id, None)
             # 移除调度器任务
-            self._scheduler.remove_job(rule_id)
-            logger.info(f"停止规则 {rule_name} 消息组后台任务")
+            if self._scheduler:
+                self._scheduler.remove_job(rule_id)
+                logger.info(f"停止规则 {rule_name} 消息组后台任务")
 
         except JobLookupError:
             pass
@@ -188,6 +193,7 @@ class MessageAggregator(metaclass=SingletonClass):
         for rule_id in self._messages.keys():
             self.remove_job(rule_id)
 
+
 class NotifyExt(_PluginBase):
     # 插件名称
     plugin_name = "消息通知扩展"
@@ -196,7 +202,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.0.2"
+    plugin_version = "2.0.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -211,25 +217,23 @@ class NotifyExt(_PluginBase):
     # 私有属性
     _local = threading.local()
 
-    _rules_key: str = "notifyext_rules"
-    _templates_key: str = "notifyext_templates"
     _rules: list[NotificationRule] = []
-    _templates: dict = {}
+    _templates: dict[str] = {}
 
     # 配置属性
     _enabled: bool = False
     _cooldown: int = 0
 
     def init_plugin(self, config: dict = None):
-        self.messagequeue = MessageQueueManager()
-        self.aggregator = MessageAggregator(self, 2)
-
-        self._rules = self.get_rules()
-        self._templates = self.get_templates()
-
         # 停止现有任务
         self.stop_service()
+        # 加载插件配置
         self.load_config(config)
+        # 加载规则配置
+        self.load_configuration()
+        # 初始化
+        self.messagequeue = MessageQueueManager()
+        self.aggregator = MessageAggregator(self)
 
     def load_config(self, config: dict):
         """加载配置"""
@@ -240,6 +244,12 @@ class NotifyExt(_PluginBase):
                 "cooldown",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
+
+    def load_configuration(self):
+        """加载配置规则和模板"""
+        self._rules = self.get_rules()
+        _templates = self.get_templates()
+        self._templates = {t.id: t.template for t in _templates}
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -259,7 +269,7 @@ class NotifyExt(_PluginBase):
         return [
             {
                 "path": "/templates",
-                "endpoint": self.templates,
+                "endpoint": self.get_templates,
                 "methods": ["GET"],
                 "auth": "bear",  # 鉴权类型：apikey/bear
                 "summary": "获取消息通知模板",
@@ -291,13 +301,17 @@ class NotifyExt(_PluginBase):
             },
         ]
 
-    def templates(self) -> list[TemplateConf]:
+    @property
+    def _rules_key(self):
+        return "notifyext_rules"
+
+    @property
+    def _templates_key(self):
+        return "notifyext_templates"
+
+    def get_templates(self) -> list[TemplateConf]:
         templates = self.get_data(key=self._templates_key) or []
         return [TemplateConf(**t) for t in templates]
-
-    def get_templates(self) -> dict[str, str]:
-        templates = self.templates()
-        return {t.id: t.template for t in templates}
 
     def save_templates(self, templates: list[TemplateConf]):
         data = [t.dict() for t in templates]

@@ -52,11 +52,12 @@
       "name": "消息通知扩展",
       "description": "拦截设定时间内重复消息，根据规则聚合/分发消息",
       "labels": "工具, 消息通知",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "2.0.3": "调整初始化顺序",
         "2.0.2": "优化聚合消息发送逻辑, YAML 中添加 `Aggregate` 配置项 `send_on`，用于设置消息发送延迟时间(小时)",
         "2.0.1": "bug修复",
         "2.0.0": "新增消息聚合, 移除多余配置项, 此次升级不兼容1.1.0",
