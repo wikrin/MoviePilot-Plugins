@@ -15,20 +15,29 @@ const mockApi = {
     // 模拟返回数据
     if (url === 'system/setting/Notifications') {
       return {
-        data: {
-          value: [
-            { name: 'Telegram', type: 'telegram' },
-            { name: 'Email', type: 'email' }
-          ]
-        }
-      }
-    } else if (url === 'media/category') {
-      return {
-        data: {
-          movie: ['动作片', '科幻片', '爱情片'],
-          tv: ['剧情剧', '喜剧剧', '动画剧']
-        }
-      }
+                "success": true,
+                "message": null,
+                "data": {
+                    "value": [
+                        {
+                            "name": "TG",
+                            "type": "telegram",
+                            "enabled": true,
+                            "config": {},
+                            "switchs": [
+                                "资源下载",
+                                "整理入库",
+                                "订阅",
+                                "站点",
+                                "手动处理",
+                                "插件",
+                                "其它",
+                                "媒体服务器"
+                            ]
+                        }
+                    ]
+                }
+            }
     } else if (url === 'plugin/NotifyExt/rules') {
     return []
     } else if (url === 'plugin/NotifyExt/templates') {

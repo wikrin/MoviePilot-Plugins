@@ -3,7 +3,7 @@ import { ref, reactive, onMounted, computed } from 'vue';
 import { v4 as uuidv4 } from 'uuid';
 import RuleCard from './cards/RuleCard.vue'
 import TemplateCard from './cards/TemplateCard.vue'
-import type { NotificationRule, templateConf, NotificationConf } from '../types';
+import type { NotificationRule, TemplateConf, NotificationConf, FrameHandlerItem } from '../types';
 
 
 const props = defineProps({
@@ -28,7 +28,7 @@ const defaultConfig = reactive({
 const config = reactive({ ...defaultConfig });
 
 const rules = ref<NotificationRule[]>([]);
-const templates = ref<templateConf[]>([]);
+const templates = ref<TemplateConf[]>([]);
 
 const showDialog = ref(false)
 const dialogMessage = ref('')
@@ -42,6 +42,7 @@ const saving = ref(false);
 
 // 所有消息渠道
 const notifications = ref<NotificationConf[]>([])
+const frameitems = ref<FrameHandlerItem[]>([])
 
 // 调用API查询通知渠道设置
 async function loadNotificationSetting() {
@@ -93,6 +94,16 @@ async function saveTemplate() {
   }
 }
 
+// 调用API获取已实现调用帧项
+async function loadFrameItems() {
+  try {
+    const result = await props.api.get('plugin/NotifyExt/frameitems')
+    frameitems.value = result ?? []
+  } catch (error) {
+    console.log(error)
+  }
+}
+
 // 通知状态
 const snackbar = reactive({
   show: false,
@@ -127,17 +138,6 @@ showDialog.value = false
 resolveConfirm(false)
 }
 
-// 计算消息渠道选项
-const sourceOptions = computed(() => {
-  return [
-    { title: '跟随系统', value: '' },
-    ...notifications.value.map(item => ({
-      title: `${item.name}-${item.type}`,
-      value: item.name,
-    })),
-  ]
-})
-
 // 计算消息模板选项
 const templateOptions = computed(() => {
   return templates.value.map(item => {
@@ -165,7 +165,8 @@ function addNewRule() {
     id: generateId(),
     name: name,
     enabled: false,
-    type: 'organizeSuccess',
+    switch: '',
+    type: '',
     target: '',
   });
 }
@@ -286,6 +287,8 @@ onMounted(() => {
   loadNotificationTemplate()
   // 加载消息通知分发规则
   loadNotificationRule()
+  // 加载调用帧处理器
+  loadFrameItems()
 })
 </script>
 
@@ -364,9 +367,10 @@ onMounted(() => {
                         <RuleCard
                           :rule="rule"
                           :index="index"
-                          :source-options="sourceOptions"
+                          :notifications="notifications"
                           :rules="rules"
                           :templates="templateOptions"
+                          :frameitems="frameitems"
                           @alert="showNotification"
                           @save="handleSaveRule"
                           @delete="deleteRule"

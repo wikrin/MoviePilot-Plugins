@@ -9,13 +9,15 @@ export interface NotificationRule {
     enabled: boolean
     // 规则类型
     type: string
+    // 场景开关
+    switch: string
     // YAML 配置
     yaml_content?: string
     // 模板ID
     Template_id?: string
 }
 
-export interface templateConf {
+export interface TemplateConf {
     name: string
     id: string
     template?: string
@@ -32,4 +34,15 @@ export interface NotificationConf {
     switchs?: string[]
     // 是否启用
     enabled: boolean
-  }
+}
+
+export interface FrameHandlerItem {
+    // 标题
+    title: string
+    // 值
+    value: string
+    // 场景开关
+    switch: string
+    // 描述
+    subtitle: string
+}
