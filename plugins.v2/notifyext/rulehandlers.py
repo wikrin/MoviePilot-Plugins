@@ -217,7 +217,7 @@ class FrameTypeHandler(BaseMessageHandler):
         """处理帧数据并返回上下文"""
         func = registry.get_handler(rule.type)
         if not func:
-            return None
+            return {}
 
         frameresult: FrameResult = func()
         if not self._need_media_recognition(frameresult):
@@ -231,7 +231,7 @@ class FrameTypeHandler(BaseMessageHandler):
         return TemplateHelper().builder.build(
             meta=frameresult.meta,
             mediainfo=mediainfo,
-            **frameresult.context
+            **frameresult.context,
         )
 
 

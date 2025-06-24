@@ -78,7 +78,7 @@ class FrameInspector:
             frame = frame.f_back
             if not frame:
                 break
-            if i < skip:
+            if i <= skip:
                 continue
 
             locals_ = frame.f_locals
@@ -285,7 +285,7 @@ class AutoSignInHandler(BaseHandler):
     """站点签到"""
     category = "站点"
 
-    @registry.register
+    # @registry.register
     def do_notify(cls) -> dict:
         """
         :label 通知
@@ -302,11 +302,11 @@ class MediaServerMsgHandler(BaseHandler):
     @registry.register
     def send(cls) -> dict:
         """
-        :description 媒体服务器消息处理
+        :description 插件
         """
+
         if result := cls.extract(method_name="send", skip=10):
             return cls._send_post(result)
-
 
     def _send_post(data: dict[str, Any]) -> dict:
         """
@@ -323,14 +323,16 @@ class MediaServerMsgHandler(BaseHandler):
                 "用户": "user",
                 "设备": "device",
                 "进度": "progress",
-                "时间": "time"
+                "时间": "time",
+                "IP地址": "ip_address",
             }
 
             return {
-                key_mapping.get(key.strip()): value.strip()
+                key_mapping[key.strip()]: value.strip()
                 for item in data_list
-                if "：" in item  # 防止格式错误
+                if "：" in item
                 for key, value in [item.split("：", 1)]
+                if key.strip() in key_mapping
             }
 
         if not data:
