@@ -126,7 +126,7 @@ class RegexTypeHandler(BaseMessageHandler):
         if aggregate and MessageAggregator().try_aggregate_message(
             rule, message, context, aggregate
         ):
-            return True
+            return None
 
         return context
 

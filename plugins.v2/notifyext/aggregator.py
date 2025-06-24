@@ -48,7 +48,7 @@ class MessageAggregator(metaclass=SingletonClass):
 
         group = self._messages[rule.id]
         group.messages.append(context)
-        group.last_time = now.isoformat()
+        group.last_time = now
 
         logger.info(f"{message} 已添加至消息组")
 
