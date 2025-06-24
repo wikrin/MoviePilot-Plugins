@@ -1,197 +1,25 @@
 # 基础库
 import copy
-import datetime
-import re
+
 import threading
 from typing import Any, Optional, Tuple, Dict, List
 
 # 第三方库
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from ruamel.yaml import YAML, CommentedMap, YAMLError
 
 # 项目库
-from app.core.meta.metabase import MetaBase
-from app.core.metainfo import MetaInfo
 from app.db import db_query
 from app.db.models.message import Message
 from app.helper.message import MessageQueueManager, TemplateHelper
 from app.log import logger
 from app.plugins import _PluginBase
-from app.scheduler import Scheduler, BackgroundScheduler, JobLookupError
 from app.schemas.message import Notification
-from app.schemas.types import MediaType
-from app.utils.singleton import SingletonClass
 
-
-class TemplateConf(BaseModel):
-    # 模板名称
-    name: str
-    # 模板ID
-    id: str
-    # 模板
-    template: Optional[str] = None
-
-
-class NotificationRule(BaseModel):
-    # 配置名
-    name: str
-    # 配置ID
-    id: str
-    # 目标渠道
-    target: str
-    # 配置开关
-    enabled: bool = False
-    # 规则类型
-    type: Optional[str] = None
-    # YAML 配置
-    yaml_content: Optional[str] = None
-    # 模板ID
-    template_id: Optional[str] = None
-
-
-class MessageGroup(BaseModel):
-    """消息组"""
-    rule: NotificationRule
-    send_in: float = 2
-    message: Notification
-    first_time: str
-    last_time: str
-    messages: List[Dict] = []
-
-    class Config:
-        arbitrary_types_allowed = True
-
-    def dict(self, *args, **kwargs):
-        d = super().dict(*args, **kwargs)
-        d["message"] = self.message.to_dict() if self.message else None
-        return d
-
-
-class MessageAggregator(metaclass=SingletonClass):
-    """消息聚合器"""
-
-    def __init__(self, plugin: 'NotifyExt'):
-        self.plugin = plugin
-        self._messages: Dict[str, MessageGroup] = {}
-        self._scheduler: BackgroundScheduler = Scheduler()._scheduler
-        self._restore_state()
-
-    def add_message(self, rule: NotificationRule, message: Notification, context: dict, send_in: float):
-        now = datetime.datetime.now()
-        if rule.id not in self._messages:
-            self._messages[rule.id] = MessageGroup(
-                rule=rule,
-                send_in=send_in,
-                message=message,
-                first_time=now.isoformat(),
-                last_time=now.isoformat(),
-            )
-            run_time = now + datetime.timedelta(hours=send_in)
-            self.add_job(rule=rule, run_time=run_time)
-
-        group = self._messages[rule.id]
-        group.messages.append(context)
-        group.last_time = now.isoformat()
-
-        logger.info(f"{message} 已添加至消息组")
-
-    def _send_group(self, rule_id: str):
-        group = self._messages.get(rule_id)
-        if not group.messages:
-            return
-
-        merged = {
-            "count": len(group.messages),
-            "messages": list(group.messages),
-            "first_time": group.first_time,
-            "last_time": group.last_time,
-        }
-
-        # 渲染消息
-        if message := self.plugin.rendered_message(group.rule, merged, group.message):
-            logger.info(f"发送 {group.rule.name} 聚合消息")
-            self.plugin.post_message(**message.dict())
-            # 移除任务
-            self.remove_job(rule_id)
-            # 删除消息
-            self._messages.pop(rule_id)
-            # 保存状态
-            self._save_state()
-
-    def _save_state(self):
-        state = {k: v.dict() for k, v in self._messages.items()}
-        self.plugin.save_data("aggregate_state", state)
-
-    def _restore_state(self):
-        state = self.plugin.get_data("aggregate_state") or {}
-        if not state:
-            return
-        for rule_id, group_data in state.items():
-            self._messages[rule_id] = MessageGroup(**group_data)
-        if not self._messages:
-            return
-        now = datetime.datetime.now()
-        for group in self._messages.values():
-            send_time = datetime.datetime.fromisoformat(group.first_time) + datetime.timedelta(hours=group.send_in)
-            if send_time < now:
-                # 超时延迟发送
-                _send_time = now + datetime.timedelta(minutes=5)
-                self.add_job(group.rule, _send_time)
-            else:
-                self.add_job(group.rule, send_time)
-
-    def add_job(self, rule: NotificationRule, run_time: datetime.datetime):
-        if not self._scheduler:
-            return
-        # 任务信息
-        job_info = {
-            "func": self._send_group,
-            "name": f"发送 {rule.name} 消息组",
-            "id": rule.id,
-            "kwargs": {"rule_id": rule.id},
-        }
-        # 添加服务
-        Scheduler()._jobs[rule.id] = {
-            **job_info,
-            "provider_name": self.plugin.plugin_name,
-            "running": False,
-        }
-        # 添加任务
-        self._scheduler.add_job(
-            **job_info,
-            trigger="date",
-            run_date=run_time,
-        )
-
-    def remove_job(self, rule_id: str):
-        if not (group := self._messages.get(rule_id, None)):
-            return
-        try:
-            rule_name = group.rule.name
-            # 删除定时任务
-            Scheduler()._jobs.pop(rule_id, None)
-            # 移除调度器任务
-            if self._scheduler:
-                self._scheduler.remove_job(rule_id)
-                logger.info(f"停止规则 {rule_name} 消息组后台任务")
-
-        except JobLookupError:
-            pass
-
-        except Exception as e:
-            logger.error(f"规则 {rule_name} 后台任务 停止失败：{e}")
-
-    @property
-    def has_active_tasks(self):
-        return bool(self._messages)
-
-    def stop_task(self):
-        if not self._messages:
-            return
-        self._save_state()
-        for rule_id in self._messages.keys():
-            self.remove_job(rule_id)
+from .aggregator import MessageAggregator
+from .framehandler import registry
+from .models import NotificationRule, TemplateConf
+from .rulehandlers import RuleHandlerMeta
+from .utils import MessageTimeUtils
 
 
 class NotifyExt(_PluginBase):
@@ -202,7 +30,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.0.4"
+    plugin_version = "2.1.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -231,8 +59,7 @@ class NotifyExt(_PluginBase):
         self.load_config(config)
         # 加载规则配置
         self.load_configuration()
-        # 初始化
-        self.messagequeue = MessageQueueManager()
+        # 初始化消息聚合
         self.aggregator = MessageAggregator(self)
 
     def load_config(self, config: dict):
@@ -309,6 +136,14 @@ class NotifyExt(_PluginBase):
                 "summary": "保存消息分发规则",
                 "description": "保存消息分发规则",
             },
+            {
+                "path": "/frameitems",
+                "endpoint": self.get_frame_items,
+                "methods": ["GET"],
+                "auth": "bear",  # 鉴权类型：apikey/bear
+                "summary": "帧处理器项",
+                "description": "获取frame方式的已实现项",
+            },
         ]
 
     @property
@@ -339,15 +174,8 @@ class NotifyExt(_PluginBase):
         # 刷新规则
         self._rules = rules
 
-    def is_within_notification_cooldown(self, message: Notification):
-        if result := self.get_message_history(message):
-            last_time = datetime.datetime.strptime(result.reg_time, "%Y-%m-%d %H:%M:%S")
-            now_time = datetime.datetime.now()
-            cooldown_minutes = (now_time - last_time).total_seconds() // 60
-            if cooldown_minutes < self._cooldown:
-                logger.info(f"上次发送消息 {cooldown_minutes} 分钟前, 跳过此次发送。")
-                return True
-        return False
+    def get_frame_items(self) -> List:
+        return registry.list_all()
 
     def get_command(self):
         pass
@@ -379,12 +207,60 @@ class NotifyExt(_PluginBase):
         if getattr(type(self)._local, "flag", False):
             return None
 
-        if message.mtype and self.is_within_notification_cooldown(message):
+        if message.mtype and MessageTimeUtils.is_within_cooldown(
+            self.get_message_history(message), self._cooldown
+        ):
             return False
 
         return self.handle_message(message)
 
-    def rendered_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> Optional[Notification]:
+    def handle_message(self, message: Notification) -> Optional[bool]:
+
+        sent_any = None
+
+        for rule in self._rules:
+            if not rule.enabled:
+                logger.debug(f"{rule.name} 未启用")
+                continue
+
+            if rule.switch and rule.switch != message.mtype.value:
+                logger.debug(f"{rule.name}场景开关: {rule.switch} 不匹配消息类型 {message.mtype.value}")
+                continue
+
+            # 获取对应类型的处理器实例(单例)
+            handler = RuleHandlerMeta.get_handler(rule.type)
+            if not handler:
+                continue
+            if not handler.can_handle(message, rule):
+                continue
+            result = handler.handle(message, rule)
+
+            if result is None:
+                return False
+            # 过滤空值
+            result = {k: v for k, v in result.items() if v}
+            if not result:
+                continue
+
+            if self.send_message(rule=rule, message=message, context=result):
+                sent_any = True
+
+        return sent_any
+
+    def send_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> bool:
+        send = False
+        if not (msg := self._rendered_message(rule, context, message)):
+            return send
+        try:
+            type(self)._local.flag = True
+            MessageQueueManager().send_message("post_message", message=msg)
+            send = True
+        finally:
+            if hasattr(type(self)._local, "flag"):
+                del type(self)._local.flag
+            return send
+
+    def _rendered_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> Optional[Notification]:
         _template = self._templates.get(rule.template_id)
         if not _template:
             logger.error(f"模板 {rule.template_id} 不存在")
@@ -407,177 +283,6 @@ class NotifyExt(_PluginBase):
             return msg
         return None
 
-    def handle_message(self, message: Notification) -> Optional[bool]:
-
-        sent_any = None
-
-        for rule in self._rules:
-            if not rule.enabled:
-                continue
-
-            if message.ctype and rule.type == message.ctype.value:
-                result = self._handle_basic_type(message, rule)
-
-            elif not message.ctype and rule.type == "regex":
-                result = self._handle_regex_type(message, rule)
-            else:
-                continue
-
-            if result is None:
-                return False
-
-            elif not result:
-                continue
-
-            if msg := self.rendered_message(rule, result, message):
-                try:
-                    type(self)._local.flag = True
-                    self.messagequeue.send_message("post_message", message=msg)
-                    sent_any = True
-                finally:
-                    if hasattr(type(self)._local, "flag"):
-                        del type(self)._local.flag
-
-        return sent_any
-
-    def _handle_basic_type(self, message: Notification, rule: NotificationRule) -> dict:
-        return TemplateHelper().get_cache_context(message.to_dict()) or {}
-
-    def _handle_regex_type(self, message: Notification, rule: NotificationRule) -> Optional[dict]:
-
-        if not rule.yaml_content:
-           return {}
-        # 加载yaml
-        yaml: CommentedMap = self._load_yaml_content(rule.yaml_content)
-        # 获取提取器
-        extractors = yaml.get("extractors")
-        # 获取元数据字段
-        meta_fields = self._extract_meta_fields(yaml)
-        # 获取聚合配置
-        aggregate: dict = yaml.get("Aggregate")
-        if not extractors:
-            logger.warn("rule extractors is empty")
-            return {}
-        context = self._extract_fields(message, extractors)
-        # 过滤掉meta属性字段
-        if meta_fields:
-            try:
-                meta = self._create_meta_instance(fields=meta_fields, context=context)
-                mediainfo = self.chain.recognize_media(meta=meta)
-                if mediainfo:
-                    # 删除meta属性字段
-                    context = {k: v for k, v in context.items() if k not in meta_fields}
-                context = TemplateHelper().builder.build(meta=meta, mediainfo=mediainfo, include_raw_objects=False, **context)
-            except Exception as e:
-                logger.warn(f"Failed to create meta instance: {e}")
-
-        if aggregate:
-            required = aggregate.get("required", [])
-            if all(field in context for field in required):
-                # 发送延迟
-                send_on = aggregate.get("send_on", 2)
-                logger.info(f"命中规则: {rule.name}")
-                return MessageAggregator().add_message(rule, message, context, send_on)
-            else:
-                return {}
-        logger.info(f"命中规则: {rule.name}")
-        return context
-
-
-    @staticmethod
-    def _load_yaml_content(yaml_content) -> dict:
-        if not yaml_content:
-            return {}
-        yaml = YAML()
-        try:
-            return yaml.load(yaml_content)
-        except YAMLError as e:
-            logger.error(f"YAML 解析失败: {e}")
-            return {}
-        except Exception as e:
-            logger.error(f"[ERROR] 未知错误: {e}")
-            return {}
-
-    @staticmethod
-    def _extract_fields(message: Notification, extractors: List[dict]) -> dict:
-        if not isinstance(extractors, list):
-            return {}
-
-        context = {}
-        for extractor in extractors:
-            field = extractor.get("field")
-            if not field:
-                continue
-
-            raw_value = getattr(message, field, None)
-            if not raw_value:
-                continue
-
-            text = str(raw_value)
-            logger.debug(f"文本内容: {text}")
-            for key, pattern in extractor.items():
-                if key == "field":
-                    continue
-                try:
-                    match = re.search(pattern, text)
-                    logger.debug(f"pattern: `{pattern}` → match: {match}")
-                    if match:
-                        if match.groupdict():
-                            context.update(match.groupdict())
-                        elif match.lastindex == 1:
-                            context[key] = match.group(1)
-                        else:
-                            context[key] = match.group()
-                except re.error as e:
-                    logger.warn(f"正则表达式无效: {pattern}, 错误: {e}")
-
-        return context
-
-    @staticmethod
-    def _extract_meta_fields(yaml_data: dict) -> dict:
-        if not isinstance(yaml_data, dict):
-            return {}
-
-        meta_fields = yaml_data.get("MetaBase")
-        if not isinstance(meta_fields, dict):
-            return {}
-
-        return {
-            k: v for k, v in meta_fields.items()
-            if k and v is not None and not isinstance(v, type(None))
-        }
-
-    @staticmethod
-    def _create_meta_instance(fields: Dict[str, str], context: Dict) -> Optional[MetaBase]:
-        if not isinstance(fields, dict) or not isinstance(context, dict):
-            return None
-
-        title_key = fields.get('title')
-        if not title_key or not context.get(title_key):
-            return None
-
-        meta = MetaInfo(
-            title=context[title_key],
-            subtitle=context.get(fields.get('subtitle'))
-        )
-
-        def map_type(value_key):
-            value = context.get(value_key)
-            return MediaType.MOVIE if value in ("movie", "电影") else MediaType.TV
-
-        field_mapping = {"type": map_type}
-
-        for key, value_key in fields.items():
-            if key in ['title', 'subtitle']:
-                continue
-
-            if key in field_mapping:
-                setattr(meta, key, field_mapping[key](value_key))
-            elif (value := context.get(value_key)) is not None:
-                setattr(meta, key, value)
-
-        return meta
-
     @staticmethod
     @db_query
     def get_message_history(message: Notification, db: Session = None) -> Optional[Message]:
@@ -591,3 +296,4 @@ class NotifyExt(_PluginBase):
         except Exception as e:
             logger.error(f"获取message记录失败: {str(e)}")
             return None
+
