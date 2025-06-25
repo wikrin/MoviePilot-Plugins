@@ -6,7 +6,7 @@ from app.scheduler import Scheduler, BackgroundScheduler
 from app.schemas.message import Notification
 from app.utils.singleton import SingletonClass
 
-from .utils import MessageTimeUtils
+from .utils import TimeUtils
 
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ class MessageAggregator(metaclass=SingletonClass):
         return False
 
     def add_message(self, rule: NotificationRule, message: Notification, context: dict, send_in: float):
-        now = MessageTimeUtils.now_iso()
+        now = TimeUtils.now_iso()
         if rule.id not in self._messages:
             self._messages[rule.id] = MessageGroup(
                 rule=rule,
@@ -43,7 +43,7 @@ class MessageAggregator(metaclass=SingletonClass):
                 first_time=now,
                 last_time=now,
             )
-            run_time = MessageTimeUtils.get_delay_time(hours=send_in)
+            run_time = TimeUtils.get_delay_time(hours=send_in)
             self.add_job(rule=rule, run_time=run_time)
 
         group = self._messages[rule.id]
@@ -85,12 +85,12 @@ class MessageAggregator(metaclass=SingletonClass):
             self._messages[rule_id] = MessageGroup(**group_data)
         if not self._messages:
             return
-        now = MessageTimeUtils.now()
+        now = TimeUtils.now()
         for group in self._messages.values():
-            send_time = MessageTimeUtils.get_send_time(group.first_time, group.send_in)
+            send_time = TimeUtils.get_send_time(group.first_time, group.send_in)
             if send_time < now:
                 # 超时延迟发送
-                _send_time = MessageTimeUtils.add_time(base_time=now, minutes=5)
+                _send_time = TimeUtils.add_time(base_time=now, minutes=5)
                 self.add_job(group.rule, _send_time)
             else:
                 self.add_job(group.rule, send_time)

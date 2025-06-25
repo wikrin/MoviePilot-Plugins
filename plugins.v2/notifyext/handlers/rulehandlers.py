@@ -1,6 +1,5 @@
 import re
-from abc import ABC, ABCMeta, abstractmethod
-from typing import ClassVar, Dict, List, Optional, Type, Union
+from typing import ClassVar, Dict, List, Optional
 
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo
@@ -8,72 +7,16 @@ from app.chain import ChainBase
 from app.helper.message import TemplateHelper
 from app.log import logger
 from app.schemas.types import MediaType
-from app.utils.singleton import SingletonClass
+from app.schemas.message import Notification
 
-from .aggregator import MessageAggregator
-from .models import NotificationRule, Notification
-from .framehandler import FrameInspector, FrameResult, registry
-from .utils import YamlParser
-
-
-class RuleHandlerMeta(SingletonClass, ABCMeta):
-    """组合单例和抽象基类的元类"""
-    _handlers: ClassVar[Dict[str, Type['BaseMessageHandler']]] = {}
-    _default_handler: ClassVar[Optional[Type['BaseMessageHandler']]] = None
-
-    def __new__(mcs, name, bases, attrs):
-        cls = super().__new__(mcs, name, bases, attrs)
-        # 跳过基类
-        if ABC in bases:
-            return cls
-
-        # 检查是否为默认处理器
-        if attrs.get('default', False):
-            mcs._default_handler = cls
-            logger.debug(f"Registered default handler: {name}")
-            return cls
-
-        # 获取处理器类型
-        handler_type = attrs.get('type')
-        if handler_type:
-            if isinstance(handler_type, list):
-                # 如果是列表，为每个类型都注册这个处理器
-                for t in handler_type:
-                    mcs._handlers[t] = cls
-                    logger.debug(f"Registered message handler: {name} for type {t}")
-            else:
-                # 单一类型直接注册
-                mcs._handlers[handler_type] = cls
-                logger.debug(f"Registered message handler: {name} for type {handler_type}")
-        return cls
-
-    @classmethod
-    def get_handler(mcs, handler_type: str) -> Optional['BaseMessageHandler']:
-        """获取处理器实例"""
-        # 优先获取指定类型的处理器
-        handler_class = mcs._handlers.get(handler_type)
-        if handler_class:
-            return handler_class()
-        # 如果找不到对应类型的处理器，返回默认处理器实例
-        if mcs._default_handler:
-            return mcs._default_handler()
-        return None
+from ..aggregator import MessageAggregator
+from ..frameinspector import FrameInspector
+from ..handlers import BaseRuleHandler, registry
+from ..models import NotificationRule, FrameResult
+from ..utils import YamlParser
 
 
-class BaseMessageHandler(ABC, metaclass=RuleHandlerMeta):
-    """消息处理器基类"""
-    type: ClassVar[Union[str, List[str]]] = None
-
-    @abstractmethod
-    def can_handle(self, message: Notification, rule: NotificationRule) -> bool:
-        pass
-
-    @abstractmethod
-    def handle(self, message: Notification, rule: NotificationRule) -> Optional[Dict]:
-        pass
-
-
-class BasicTypeHandler(BaseMessageHandler):
+class BasicHandler(BaseRuleHandler):
     """基础类型处理器"""
     type: ClassVar[str] = [
         "subscribeAdded",
@@ -89,7 +32,7 @@ class BasicTypeHandler(BaseMessageHandler):
         return TemplateHelper().get_cache_context(message.to_dict()) or {}
 
 
-class RegexTypeHandler(BaseMessageHandler):
+class RegexHandler(BaseRuleHandler):
     """正则类型处理器"""
     type = "regex"
 
@@ -197,7 +140,7 @@ class RegexTypeHandler(BaseMessageHandler):
         return meta
 
 
-class FrameTypeHandler(BaseMessageHandler):
+class FrameHandler(BaseRuleHandler):
     type = list(registry._handlers.keys())
     default = True # 默认处理器
 
@@ -235,7 +178,7 @@ class FrameTypeHandler(BaseMessageHandler):
         )
 
 
-class FrameYamlTypeHandler(BaseMessageHandler):
+class FrameYamlHandler(BaseRuleHandler):
     """
     处理帧数据
     """

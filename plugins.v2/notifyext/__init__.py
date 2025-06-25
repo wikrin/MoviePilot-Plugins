@@ -1,6 +1,5 @@
 # 基础库
 import copy
-
 import threading
 from typing import Any, Optional, Tuple, Dict, List
 
@@ -15,11 +14,11 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.message import Notification
 
+# 本地库
 from .aggregator import MessageAggregator
-from .framehandler import registry
+from .handlers import RuleHandlerMeta, registry
 from .models import NotificationRule, TemplateConf
-from .rulehandlers import RuleHandlerMeta
-from .utils import MessageTimeUtils
+from .utils import TimeUtils
 
 
 class NotifyExt(_PluginBase):
@@ -30,7 +29,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.1.4"
+    plugin_version = "2.1.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -59,6 +58,8 @@ class NotifyExt(_PluginBase):
         self.load_config(config)
         # 加载规则配置
         self.load_configuration()
+        # 导入处理器
+        self.load_handlers()
         # 初始化消息聚合
         self.aggregator = MessageAggregator(self)
 
@@ -77,6 +78,17 @@ class NotifyExt(_PluginBase):
         self._rules = self.get_rules()
         _templates = self.get_templates()
         self._templates = {t.id: t.template for t in _templates}
+
+    @staticmethod
+    def load_handlers():
+        """加载所有处理器"""
+        from pathlib import Path
+        from app.helper.module import ModuleHelper
+
+        handlers_path = "app/plugins/notifyext/handlers"
+        module_name = handlers_path.replace("/", ".")
+
+        ModuleHelper.dynamic_import_all_modules(Path(handlers_path), module_name)
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -207,7 +219,7 @@ class NotifyExt(_PluginBase):
         if getattr(type(self)._local, "flag", False):
             return None
 
-        if message.mtype and MessageTimeUtils.is_within_cooldown(
+        if message.mtype and TimeUtils.is_within_cooldown(
             self.get_message_history(message), self._cooldown
         ):
             return False

@@ -7,7 +7,7 @@ from app.utils.timer import TimerUtils
 
 
 
-class MessageTimeUtils:
+class TimeUtils:
     """消息时间处理工具类"""
 
     @staticmethod
@@ -54,6 +54,25 @@ class MessageTimeUtils:
             hours=hours,
             days=days
         )
+
+    @staticmethod
+    def runtime_format(millisecond: int):
+        """
+        将时间值转换为 HH:MM:SS 格式。
+        :p millisecond: int (毫秒)
+
+        >>> runtime_format(millisecond=90000)
+        '00:01:30'
+        """
+        if millisecond is None:
+            return None
+        total_seconds = millisecond // 1000
+
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     @staticmethod
     def is_overtime(send_time: datetime.datetime) -> bool:
