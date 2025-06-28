@@ -15,10 +15,10 @@ class TimeUtils:
         return datetime.datetime.now()
 
     @staticmethod
-    def get_send_time(first_time: str, send_in: float) -> datetime.datetime:
+    def get_send_time(first_time: str, delay_time: float) -> datetime.datetime:
         """计算消息发送时间"""
         base_time = datetime.datetime.fromisoformat(first_time)
-        return base_time + datetime.timedelta(hours=send_in)
+        return base_time + datetime.timedelta(minutes=delay_time)
 
     @staticmethod
     def get_delay_time(minutes: int = 0, hours: int = 0, days: int = 0) -> datetime.datetime:

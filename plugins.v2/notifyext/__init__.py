@@ -29,7 +29,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.1.5"
+    plugin_version = "2.2.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -236,7 +236,7 @@ class NotifyExt(_PluginBase):
                 continue
 
             if rule.switch and rule.switch != message.mtype.value:
-                logger.debug(f"{rule.name}场景开关: {rule.switch} 不匹配消息类型 {message.mtype.value}")
+                logger.debug(f"{rule.name} 场景开关: {rule.switch} 不匹配消息类型 {message.mtype.value}")
                 continue
 
             # 获取对应类型的处理器实例(单例)
@@ -247,39 +247,46 @@ class NotifyExt(_PluginBase):
                 continue
             result = handler.handle(message, rule)
 
-            if result is None:
-                return False
             # 过滤空值
             result = {k: v for k, v in result.items() if v}
             if not result:
                 continue
 
-            if self.send_message(rule=rule, message=message, context=result):
+            # 消息聚合
+            if rule.aggregate and self.aggregator.try_aggregate_message(message, rule, result):
+                # 消息聚合后截断run_module后续执行
+                return True
+
+            # 发送消息
+            if self.send_message(message=message, rule=rule, context=result):
                 sent_any = True
 
         return sent_any
 
-    def send_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> bool:
+    def send_message(self, message: Notification, rule: NotificationRule, context: dict) -> bool:
         send = False
-        if not (msg := self._rendered_message(rule, context, message)):
-            return send
+        if not (msg := self._rendered_message(message, rule, context)):
+            return None
         try:
-            type(self)._local.flag = True
+            setattr(type(self)._local, "flag", True)
             MessageQueueManager().send_message("post_message", message=msg)
             send = True
         finally:
             if hasattr(type(self)._local, "flag"):
-                del type(self)._local.flag
+                delattr(type(self)._local, "flag")
             return send
 
-    def _rendered_message(self, rule: NotificationRule, context: dict, message: Notification = None) -> Optional[Notification]:
+    def _rendered_message(self, message: Notification, rule: NotificationRule, context: dict) -> Optional[Notification]:
+        if not rule.template_id:
+            logger.warn(f"规则 {rule.name} 模板未设置, 发送原始消息")
+            return None
         _template = self._templates.get(rule.template_id)
         if not _template:
-            logger.error(f"模板 {rule.template_id} 不存在")
+            logger.warn(f"模板 {rule.template_id} 不存在, 发送原始消息")
             return None
         template_content = TemplateHelper().parse_template_content(_template, template_type="literal")
         # 避免引用修改源数据
-        msg = copy.deepcopy(message) if message else Notification()
+        msg = copy.deepcopy(message)
         logger.info(f"规则：{rule.name} 开始通过模板渲染消息")
         rendered = TemplateHelper().render_with_context(template_content, context)
         if not rendered:

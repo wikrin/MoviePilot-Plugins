@@ -1,5 +1,5 @@
 import re
-from typing import ClassVar, Dict, List, Optional
+from typing import List, Optional
 
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo
@@ -9,7 +9,6 @@ from app.log import logger
 from app.schemas.types import MediaType
 from app.schemas.message import Notification
 
-from ..aggregator import MessageAggregator
 from ..frameinspector import FrameInspector
 from ..handlers import BaseRuleHandler, registry
 from ..models import NotificationRule, FrameResult
@@ -18,7 +17,7 @@ from ..utils import YamlParser
 
 class BasicHandler(BaseRuleHandler):
     """基础类型处理器"""
-    type: ClassVar[str] = [
+    type = [
         "subscribeAdded",
         "subscribeComplete",
         "organizeSuccess",
@@ -28,7 +27,7 @@ class BasicHandler(BaseRuleHandler):
     def can_handle(self, message: Notification, rule: NotificationRule) -> bool:
         return message.ctype and rule.type == message.ctype.value
 
-    def handle(self, message: Notification, rule: NotificationRule) -> Optional[Dict]:
+    def handle(self, message: Notification, rule: NotificationRule) -> dict:
         return TemplateHelper().get_cache_context(message.to_dict()) or {}
 
 
@@ -39,14 +38,13 @@ class RegexHandler(BaseRuleHandler):
     def can_handle(self, message: Notification, rule: NotificationRule) -> bool:
         return not message.ctype and rule.type == "regex"
 
-    def handle(self, message: Notification, rule: NotificationRule) -> Optional[Dict]:
+    def handle(self, message: Notification, rule: NotificationRule) -> dict:
         if not rule.yaml_content:
             return {}
 
         yaml_data = YamlParser.parse(rule.yaml_content)
         extractors = yaml_data.get("extractors", [])
         meta_fields = YamlParser.extract_meta_fields(yaml_data)
-        aggregate: dict = yaml_data.get("Aggregate")
 
         if not extractors:
             logger.warn("rule extractors is empty")
@@ -65,11 +63,6 @@ class RegexHandler(BaseRuleHandler):
                 context = TemplateHelper().builder.build(meta=meta, mediainfo=mediainfo, include_raw_objects=False, **context)
             except Exception as e:
                 logger.warn(f"Failed to create meta instance: {e}")
-
-        if aggregate and MessageAggregator().try_aggregate_message(
-            rule, message, context, aggregate
-        ):
-            return None
 
         return context
 
@@ -109,7 +102,7 @@ class RegexHandler(BaseRuleHandler):
         return context
 
     @staticmethod
-    def _create_meta_instance(fields: Dict[str, str], context: Dict) -> Optional[MetaBase]:
+    def _create_meta_instance(fields: dict[str, str], context: dict) -> Optional[MetaBase]:
         if not isinstance(fields, dict) or not isinstance(context, dict):
             return None
 
@@ -156,7 +149,7 @@ class FrameHandler(BaseRuleHandler):
     def can_handle(self, message: Notification, rule: NotificationRule) -> bool:
         return rule.enabled and registry.get_handler(rule.type)
 
-    def handle(self, message: Notification, rule: NotificationRule) -> Optional[Dict]:
+    def handle(self, message: Notification, rule: NotificationRule) -> dict:
         """处理帧数据并返回上下文"""
         func = registry.get_handler(rule.type)
         if not func:
@@ -187,7 +180,7 @@ class FrameYamlHandler(BaseRuleHandler):
     def can_handle(self, message: Notification, rule: NotificationRule) -> bool:
         return not message.ctype and rule.type == "frame" and rule.yaml_content
 
-    def handle(self, message: Notification, rule: NotificationRule):
+    def handle(self, message: Notification, rule: NotificationRule) -> dict:
         # 加载yaml
         yaml = YamlParser.parse(rule.yaml_content)
         if not(frame := yaml.get("Frame", {})):
@@ -197,12 +190,4 @@ class FrameYamlHandler(BaseRuleHandler):
         required = frame.get("required", [])
         if any(field not in context for field in required):
             return {}
-        # 获取聚合配置
-        aggregate: dict = yaml.get("Aggregate")
-        if aggregate and MessageAggregator().try_aggregate_message(
-            rule, message, context, aggregate
-        ):
-            return True
-
-        logger.info(f"命中规则: {rule.name}")
         return context

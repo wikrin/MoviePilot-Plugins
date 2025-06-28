@@ -81,7 +81,7 @@ class BaseRuleHandler(ABC, metaclass=RuleHandlerMeta):
         pass
 
     @abstractmethod
-    def handle(self, message: Notification, rule: NotificationRule) -> Optional[Dict]:
+    def handle(self, message: Notification, rule: NotificationRule) -> dict:
         pass
 
 

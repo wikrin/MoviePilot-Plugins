@@ -41,6 +41,15 @@ class TemplateConf(BaseModel):
     template: Optional[str] = None
 
 
+class AggregateConf(BaseModel):
+    # 等待时间
+    wait_time: int = 5
+    # 包含
+    include: Optional[str] = None
+    # 排除
+    exclude: Optional[str] = None
+
+
 class NotificationRule(BaseModel):
     # 配置名
     name: str
@@ -54,6 +63,8 @@ class NotificationRule(BaseModel):
     switch: str = ""
     # 规则类型
     type: Optional[str] = None
+    # 聚合配置
+    aggregate: AggregateConf = Field(default_factory=AggregateConf)
     # YAML 配置
     yaml_content: Optional[str] = None
     # 模板ID
@@ -63,7 +74,7 @@ class NotificationRule(BaseModel):
 class MessageGroup(BaseModel):
     """消息组"""
     rule: NotificationRule
-    send_in: float = 2
+    wait_time: float = 5
     message: Notification
     first_time: str
     last_time: str
