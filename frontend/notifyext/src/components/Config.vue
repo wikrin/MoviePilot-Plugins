@@ -3,7 +3,7 @@ import { ref, reactive, onMounted, computed } from 'vue';
 import { v4 as uuidv4 } from 'uuid';
 import RuleCard from './cards/RuleCard.vue'
 import TemplateCard from './cards/TemplateCard.vue'
-import type { NotificationRule, TemplateConf, NotificationConf, FrameHandlerItem } from '../types';
+import type { NotificationRule, AggregateConf, TemplateConf, NotificationConf, FrameHandlerItem } from '../types';
 
 
 const props = defineProps({
@@ -166,7 +166,7 @@ function addNewRule() {
     name: name,
     enabled: false,
     switch: '',
-    type: '',
+    aggregate: {wait_time: 5} as AggregateConf,
     target: '',
   });
 }
