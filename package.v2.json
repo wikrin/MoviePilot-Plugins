@@ -76,5 +76,18 @@
       "history": {
         "1.0.1": "完善逻辑, 增加`tmdb_id`的更正"
       }
+    },
+    "CureTMDbAnime": {
+      "name": "CTMDbA",
+      "description": "对 TMDb 上被合并为一季的番剧进行季信息分离。",
+      "labels": "识别",
+      "version": "1.1.4",
+      "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
+      "author": "Attente",
+      "level": 1,
+      "history": {
+        "1.1.4": "修复部分错误",
+        "1.0.0": "增加本地或远程文件自定义分离"
+      }
     }
   }
