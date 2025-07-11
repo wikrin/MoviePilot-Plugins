@@ -81,11 +81,12 @@
       "name": "CTMDbA",
       "description": "对 TMDb 上被合并为一季的番剧进行季信息分离。",
       "labels": "识别",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.1.5": "修复某些情况下刮削报错的问题",
         "1.1.4": "修复部分错误",
         "1.0.0": "增加本地或远程文件自定义分离"
       }

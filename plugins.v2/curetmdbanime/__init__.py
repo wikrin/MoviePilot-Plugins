@@ -35,6 +35,26 @@ class SeasonCache:
         if series := self.get(tmdbid):
             return next((s for s in series.seasons if s.season_number == season), None)
 
+    def org_season_episode(self, tmdbid: int, season: int, episode: int = None) -> Tuple[int, int]:
+        """
+        根据逻辑季信息解析出原始季号和集号。
+        如果没有逻辑季，则尝试获取第一个 tv 类型的原始季号。
+        :param tmdbid: 媒体 TMDB ID
+        :param season: 用户提供的季号
+        :param episode: 用户提供的集号（可选）
+        :return: (original_season, original_episode)
+        """
+        if season is not None and episode is not None:
+            if logic := self._get_logic_season(tmdbid, season):
+                return (logic.org_sea(episode), logic.org_ep(episode))
+        elif season is not None:
+            seasons = self.org_seasons(tmdbid, season)
+            for s in seasons:
+                if s.type == "tv":
+                    return (s.season_number, episode)
+
+        return (season, episode)
+
     def org_to_logic(self, tmdbid: int, season: int) -> Dict[tuple[Union[int, str], int], EpisodeMap]:
         logic = self._get_logic_season(tmdbid, season)
         return logic.org_map if logic else None
@@ -227,7 +247,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -593,17 +613,7 @@ class CureTMDbAnime(_PluginBase):
         """
         if not self.is_eligible(mtype=mediainfo.type):
             return None
-
-        if season is not None and episode is not None:
-            logic = self.cache._get_logic_season(mediainfo.tmdb_id, season)
-            org_sea = logic.org_sea(episode)
-            org_ep = logic.org_ep(episode)
-        elif season is not None:
-            seasons = self.cache.org_seasons(mediainfo.tmdb_id, season)
-            for s in seasons:
-                if s.type == "tv":
-                    org_sea = s.season_number
-                    break
+        org_sea, org_ep = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
 
         if season is not None:
             # 查询季信息
@@ -636,16 +646,7 @@ class CureTMDbAnime(_PluginBase):
             return None
 
         images = {}
-        if season is not None and episode is not None:
-            logic = self.cache._get_logic_season(mediainfo.tmdb_id, season)
-            season = logic.org_sea(episode)
-            episode = logic.org_ep(episode)
-        elif season is not None:
-            seasons = self.cache.org_seasons(mediainfo.tmdb_id, season)
-            for s in seasons:
-                if s.type == "tv":
-                    season = s.season_number
-                    break
+        season, episode = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
 
         if season is not None:
             # 只需要季集的图片
