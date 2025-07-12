@@ -35,41 +35,39 @@ class SeasonCache:
         if series := self.get(tmdbid):
             return next((s for s in series.seasons if s.season_number == season), None)
 
-    def org_season_episode(self, tmdbid: int, season: int, episode: int = None) -> Tuple[int, int]:
+    def org_season_episode(self, tmdbid: int, season: int, episode: int = None) -> Tuple[int, int, dict]:
         """
         根据逻辑季信息解析出原始季号和集号。
         如果没有逻辑季，则尝试获取第一个 tv 类型的原始季号。
         :param tmdbid: 媒体 TMDB ID
         :param season: 用户提供的季号
         :param episode: 用户提供的集号（可选）
-        :return: (original_season, original_episode)
+        :return: (original_season, original_episode, seasoninfo)
         """
-        if season is not None and episode is not None:
-            if logic := self._get_logic_season(tmdbid, season):
-                return (logic.org_sea(episode), logic.org_ep(episode))
-        elif season is not None:
-            seasons = self.org_seasons(tmdbid, season)
-            for s in seasons:
-                if s.type == "tv":
-                    return (s.season_number, episode)
-
-        return (season, episode)
+        if season is None:
+            return (season, episode, {})
+        seasoninfo = {}
+        if logic := self._get_logic_season(tmdbid, season):
+            seasoninfo.update(logic.to_dict())
+            if episode is not None:
+                season = logic.org_sea(episode)
+                episode = logic.org_ep(episode)
+            else:
+                for _map in logic.episodes_map.values():
+                    if _map.type == "tv" and _map.season_number is not None:
+                        season = _map.season_number
+                        break
+        return (season, episode, seasoninfo)
 
     def org_to_logic(self, tmdbid: int, season: int) -> Dict[tuple[Union[int, str], int], EpisodeMap]:
         logic = self._get_logic_season(tmdbid, season)
         return logic.org_map if logic else None
 
-    def org_seasons(self, tmdbid: int, season: int) -> list[EpisodeMap]:
+    def unique_seasons(self, tmdbid: int, season: int) -> list[EpisodeMap]:
         logic = self._get_logic_season(tmdbid, season)
         if not logic:
             return []
         return logic.unique_entry
-
-    def org_ep(self, tmdbid: int, season: int, episode: int) -> int:
-        logic = self._get_logic_season(tmdbid, season)
-        if not logic:
-            return episode
-        return logic.org_ep(episode)
 
     def clear(self):
         self._cache.clear()
@@ -247,7 +245,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.1.5"
+    plugin_version = "1.1.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -467,23 +465,22 @@ class CureTMDbAnime(_PluginBase):
         尝试基于用户提供的 begin_season 来校正元数据。
         :return: 是否成功进行了校正
         """
-        if not meta.begin_season:
-            return False
+        begin_sea = meta.begin_season or 1
 
         org_to_logic_map = series.org_map
         corrected = False
 
         # 校正 begin_episode 的季号与集号
-        if meta.begin_episode and (meta.begin_season, meta.begin_episode) in org_to_logic_map:
-            entry = org_to_logic_map[(meta.begin_season, meta.begin_episode)]
+        if meta.begin_episode and (begin_sea, meta.begin_episode) in org_to_logic_map:
+            entry = org_to_logic_map[(begin_sea, meta.begin_episode)]
             meta.begin_season = entry.season_number
             meta.begin_episode = entry.episode_number
             corrected = True
 
         # 处理 end_episode（若存在）
-        season = meta.end_season or meta.begin_season
-        if meta.end_episode and (season, meta.end_episode) in org_to_logic_map:
-            entry = org_to_logic_map[(season, meta.end_episode)]
+        end_sea = meta.end_season or begin_sea
+        if meta.end_episode and (end_sea, meta.end_episode) in org_to_logic_map:
+            entry = org_to_logic_map[(end_sea, meta.end_episode)]
             meta.end_season = entry.season_number if meta.end_season else None
             meta.end_episode = entry.episode_number
             corrected = True
@@ -563,10 +560,10 @@ class CureTMDbAnime(_PluginBase):
         if not self.is_eligible(episode_group=episode_group):
             return None
 
-        org_seasons = self.cache.org_seasons(tmdbid, season)
+        unique_seasons = self.cache.unique_seasons(tmdbid, season)
         tmdb_info = [
             info
-            for entry in org_seasons
+            for entry in unique_seasons
             if (
                 info := self.chain.tmdb_info(
                     tmdbid=entry.tmdbid or tmdbid,
@@ -613,11 +610,16 @@ class CureTMDbAnime(_PluginBase):
         """
         if not self.is_eligible(mtype=mediainfo.type):
             return None
-        org_sea, org_ep = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
+        org_sea, org_ep, info = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
 
         if season is not None:
             # 查询季信息
-            seasoninfo = self.scraper.default_tmdb.get_tv_season_detail(mediainfo.tmdb_id, org_sea)
+            seasoninfo = {
+                **self.scraper.default_tmdb.get_tv_season_detail(
+                    mediainfo.tmdb_id, org_sea
+                ),
+                **info,
+            }
             if episode:
                 # 集元数据文件
                 episodeinfo = self.scraper._TmdbScraper__get_episode_detail(seasoninfo, org_ep)
@@ -646,24 +648,26 @@ class CureTMDbAnime(_PluginBase):
             return None
 
         images = {}
-        season, episode = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
+        season, episode, info = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
 
         if season is not None:
+            seasoninfo = {
+                **self.scraper.original_tmdb(mediainfo).get_tv_season_detail(
+                    mediainfo.tmdb_id, season
+                ),
+                **info,
+            }
             # 只需要季集的图片
-            if episode:
+            if seasoninfo:
                 # 集的图片
-                seasoninfo = self.scraper.original_tmdb(mediainfo).get_tv_season_detail(mediainfo.tmdb_id, season)
-                if seasoninfo:
+                if episode:
                     episodeinfo = self.scraper._TmdbScraper__get_episode_detail(seasoninfo, episode)
                     if episodeinfo and episodeinfo.get("still_path"):
                         # TMDB集still图片
                         still_name = f"{episode}"
                         still_url = f"https://{settings.TMDB_IMAGE_DOMAIN}/t/p/original{episodeinfo.get('still_path')}"
                         images[still_name] = still_url
-            else:
-                # 季的图片
-                seasoninfo = self.scraper.original_tmdb(mediainfo).get_tv_season_detail(mediainfo.tmdb_id, season)
-                if seasoninfo:
+                else:
                     # TMDB季poster图片
                     poster_name, poster_url = self.scraper.get_season_poster(seasoninfo, season)
                     if poster_name and poster_url:

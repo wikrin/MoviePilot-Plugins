@@ -179,11 +179,11 @@ class LogicSeason(BaseModel):
             "poster_path": self.poster_path,
         }
 
-    def org_ep(self, ep) -> Optional[int]:
-        return self.episodes_map[ep].episode_number
+    def org_ep(self, ep) -> int:
+        return self.episodes_map[ep].episode_number or ep
 
-    def org_sea(self, ep) -> Optional[int]:
-        return self.episodes_map[ep].season_number
+    def org_sea(self, ep) -> int:
+        return self.episodes_map[ep].season_number or self.season_number
 
     @property
     def episode_count(self) -> int:
