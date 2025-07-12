@@ -2,7 +2,7 @@
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Dict, List, Tuple, Union
+from typing import Any, Optional, Dict, List, Tuple
 
 # 项目库
 from app import schemas
@@ -21,8 +21,9 @@ from .models import EpisodeMap, SeriesEntry, LogicSeason, LogicSeries
 
 
 class SeasonCache:
-    def __init__(self):
+    def __init__(self, use_cont_eps: bool = False):
         self._cache: Dict[int, LogicSeries] = {}
+        self.use_cont_eps = use_cont_eps
 
     def put(self, tmdbid: int, series: LogicSeries):
         self._cache[tmdbid] = series
@@ -50,8 +51,11 @@ class SeasonCache:
         if logic := self._get_logic_season(tmdbid, season):
             seasoninfo.update(logic.to_dict())
             if episode is not None:
-                season = logic.org_sea(episode)
-                episode = logic.org_ep(episode)
+                mapping = logic.org_map(self.use_cont_eps)
+                for f, l in mapping.items():
+                    if (season, episode) == f or (season, episode) == l:
+                        season, episode = f
+                        break
             else:
                 for _map in logic.episodes_map.values():
                     if _map.type == "tv" and _map.season_number is not None:
@@ -59,9 +63,18 @@ class SeasonCache:
                         break
         return (season, episode, seasoninfo)
 
-    def org_to_logic(self, tmdbid: int, season: int) -> Dict[tuple[Union[int, str], int], EpisodeMap]:
+    def org_to_logic(self, tmdbid: int, season: int) -> Dict[tuple, tuple[int, int]]:
         logic = self._get_logic_season(tmdbid, season)
-        return logic.org_map if logic else None
+        return logic.org_map(self.use_cont_eps) if logic else None
+
+    def org_map(self, tmdbid: int) -> Optional[Dict[tuple, tuple[int, int]]]:
+        """
+        获取原始季映射关系
+        :param tmdbid: 媒体 TMDB ID
+        :param use_cont_eps: 是否使用连续集号
+        """
+        if logic := self.get(tmdbid):
+            return logic.org_map(self.use_cont_eps)
 
     def unique_seasons(self, tmdbid: int, season: int) -> list[EpisodeMap]:
         logic = self._get_logic_season(tmdbid, season)
@@ -245,7 +258,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.1.6"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -264,6 +277,7 @@ class CureTMDbAnime(_PluginBase):
     _enabled: bool = False
     _category: Optional[str] = "日番"
     _source: Optional[str] = ""
+    _use_cont_eps: bool = False
 
     @property
     def flag(self) -> bool:
@@ -293,7 +307,7 @@ class CureTMDbAnime(_PluginBase):
         # 加载插件配置
         self.load_config(config)
 
-        self.cache = SeasonCache()
+        self.cache = SeasonCache(self._use_cont_eps)
         self.splitter = SeasonSplitter(self)
         self.scraper = TmdbScraper()
 
@@ -305,6 +319,7 @@ class CureTMDbAnime(_PluginBase):
                 "enabled",
                 "category",
                 "source",
+                "use_cont_eps",
             ):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
@@ -368,6 +383,22 @@ class CureTMDbAnime(_PluginBase):
                                 },
                                 'content': [
                                     {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'use_cont_eps',
+                                            'label': '使用连续集号',
+                                        }
+                                    }
+                                ]
+                            },
+                            {
+                                'component': 'VCol',
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
+                                'content': [
+                                    {
                                         'component': 'VSelect',
                                         'props': {
                                             'model': 'category',
@@ -399,6 +430,7 @@ class CureTMDbAnime(_PluginBase):
             "enabled": False,
             "category" : "日番",
             "source": "https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
+            "use_cont_eps": False,
         }
 
     def get_page(self):
@@ -449,40 +481,39 @@ class CureTMDbAnime(_PluginBase):
         if not meta or not mediainfo:
             return
 
-        series = self.cache.get(mediainfo.tmdb_id)
-        if not series:
-            return
+        if _map := self.cache.org_map(mediainfo.tmdb_id):
 
-        # 尝试基于指定的 begin_season 查找匹配
-        self._correct_by_specified(meta, series)
+            # 尝试基于指定的 begin_season 查找匹配
+            self._correct_by_specified(meta, _map)
 
     def _correct_by_specified(
         self,
         meta: MetaBase,
-        series: LogicSeries
+        episodes_map: dict[tuple, tuple[int, int]]
     ) -> bool:
         """
         尝试基于用户提供的 begin_season 来校正元数据。
         :return: 是否成功进行了校正
         """
-        begin_sea = meta.begin_season or 1
+        if not episodes_map:
+            return False
 
-        org_to_logic_map = series.org_map
+        begin_sea = meta.begin_season or 1
         corrected = False
 
         # 校正 begin_episode 的季号与集号
-        if meta.begin_episode and (begin_sea, meta.begin_episode) in org_to_logic_map:
-            entry = org_to_logic_map[(begin_sea, meta.begin_episode)]
-            meta.begin_season = entry.season_number
-            meta.begin_episode = entry.episode_number
+        if meta.begin_episode and (begin_sea, meta.begin_episode) in episodes_map:
+            sea, ep = episodes_map[begin_sea, meta.begin_episode]
+            meta.begin_season = sea
+            meta.begin_episode = ep
             corrected = True
 
         # 处理 end_episode（若存在）
         end_sea = meta.end_season or begin_sea
-        if meta.end_episode and (end_sea, meta.end_episode) in org_to_logic_map:
-            entry = org_to_logic_map[(end_sea, meta.end_episode)]
-            meta.end_season = entry.season_number if meta.end_season else None
-            meta.end_episode = entry.episode_number
+        if meta.end_episode and (end_sea, meta.end_episode) in episodes_map:
+            sea, ep = episodes_map[end_sea, meta.end_episode]
+            meta.end_season = sea if meta.end_season else None
+            meta.end_episode = ep
             corrected = True
 
         if corrected:
@@ -531,12 +562,11 @@ class CureTMDbAnime(_PluginBase):
         if logic := self.splitter.from_tmdb(media_info):
             self.cache.put(media_info.tmdb_id, logic)
             seasons_info = logic.seasons_info
-            seasons = {}
+            seasons = logic.seasons_eps(self._use_cont_eps)
             season_years = {}
 
             for info in seasons_info:
                 season_number = info.get("season_number")
-                seasons[season_number] = list(range(1, info.get("episode_count", 0) + 1))
                 season_years[season_number] = str(info.get("air_date")).split("-")[0]
             # 每季集清单
             if seasons:
@@ -586,7 +616,7 @@ class CureTMDbAnime(_PluginBase):
                     if k not in {"season_number", "episode_number"}
                 },
                 season_number=season,
-                episode_number=getattr(eps[_k], "episode_number"),
+                episode_number=eps[_k][1],
             )
             for info in tmdb_info
             for ep in info.get("episodes") or [info]

@@ -163,12 +163,6 @@ class LogicSeason(BaseModel):
     # 海报
     poster_path: Optional[str] = None
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        """当 episode_map 被修改时清除缓存"""
-        if name == "episodes_map":
-            object.__setattr__(self, "_org_map_cache", None)
-        object.__setattr__(self, name, value)
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name or f"第 {self.season_number} 季",
@@ -179,11 +173,25 @@ class LogicSeason(BaseModel):
             "poster_path": self.poster_path,
         }
 
-    def org_ep(self, ep) -> int:
-        return self.episodes_map[ep].episode_number or ep
+    def eps(self, use_cont_eps) -> list[int]:
+        return [logic[1] for logic in self.org_map(use_cont_eps).values()]
 
-    def org_sea(self, ep) -> int:
-        return self.episodes_map[ep].season_number or self.season_number
+    def org_map(self, use_cont_eps: bool = False) -> dict[tuple, tuple[int, int]]:
+        """
+        返回原始季、集到新的集的映射关系
+        - TV: (tmdb_s, tmdb_e) -> s, e
+        - MOVIE: ("movie", tmdbid) -> s, e
+        """
+        offset = 0
+        if use_cont_eps:
+            for ep, org in self.episodes_map.items():
+                if org.season_number and org.episode_number is not None:
+                    offset = org.episode_number - ep
+                    break
+        return {
+            org.mapping_key: (self.season_number, ep + offset)
+            for ep, org in self.episodes_map.items()
+        }
 
     @property
     def episode_count(self) -> int:
@@ -192,28 +200,6 @@ class LogicSeason(BaseModel):
     @property
     def org_seasons(self) -> list[int]:
         return sorted({s.season_number for s in self.episodes_map.values()})
-
-    @property
-    def org_map(self) -> dict[tuple[int, int], EpisodeMap]:
-        """
-        返回原始季、集到新的集的映射关系
-        - TV: (tmdb_s, tmdb_e) -> EpisodeMap
-        - MOVIE: ("movie", tmdbid) -> EpisodeMap
-        """
-        if _map_cache := getattr(self, "_org_map_cache", None):
-            return _map_cache
-        _map = {
-            org.mapping_key: EpisodeMap(
-                order=ep,
-                season_number=self.season_number,
-                episode_number=ep,
-                type=org.type,
-                tmdbid=org.tmdbid,
-            )
-            for ep, org in self.episodes_map.items()
-        }
-        object.__setattr__(self, "_org_map_cache", _map)
-        return _map
 
     @property
     def unique_entry(self) -> List[EpisodeMap]:
@@ -251,23 +237,13 @@ class LogicSeries(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    def __setattr__(self, name: str, value: Any) -> None:
-        """当 seasons 被修改时更新缓存"""
-        if name == "seasons":
-            object.__setattr__(self, "_org_map_cache", None)
-            object.__setattr__(self, "_reverse_map_cache", None)
-        object.__setattr__(self, name, value)
-
-    @property
-    def org_map(self) -> dict[tuple[int, int], EpisodeMap]:
-        """返回 (org_s, org_e) -> EpisodeMap 的映射表（缓存）"""
-        if _map_cache := getattr(self, "_org_map_cache", None):
-            return _map_cache
-        _map = {}
-        for s in self.seasons:
-            _map.update(s.org_map)
-        object.__setattr__(self, "_org_map_cache", _map)
-        return _map
+    def org_map(self, use_cont_eps: bool = False) -> dict[tuple, tuple[int, int]]:
+        """返回 (org_s, org_e) -> s, e 的映射表（缓存）"""
+        return {
+            k: v
+            for s in self.seasons
+            for k, v in s.org_map(use_cont_eps).items()
+        }
 
     def add_season(self, name, air_date, season_number, episodes_map, **kwargs):
         self.seasons.append(
@@ -288,6 +264,9 @@ class LogicSeries(BaseModel):
 
     def season_info(self, season_number) -> Optional[LogicSeason]:
         return next((season for season in self.seasons if season.season_number == season_number), None)
+
+    def seasons_eps(self, use_cont_eps: bool = False) -> Dict[int, List[int]]:
+        return {s.season_number: s.eps(use_cont_eps) for s in self.seasons}
 
     @property
     def seasons_info(self) -> List[dict]:
