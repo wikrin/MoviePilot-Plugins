@@ -236,7 +236,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.1.0"
+    plugin_version = "1.1.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -482,7 +482,7 @@ class SubscribeCal(_PluginBase):
             info = result_cache[cachekey]
         elif sub.type == MediaType.TV.value:
             if sub.episode_group:
-                if result := self.tmdbapi.get_tv_group_detail(group_id=sub.episode_group, season=sub.season):
+                if result := TmdbApi().get_tv_group_detail(group_id=sub.episode_group, season=sub.season):
                     list(map(lambda x: x.update(season_number=sub.season), result.get('episodes', [])))
             else:
                 result = self.chain.tmdb_info(tmdbid=sub.tmdbid, mtype=MediaType(sub.type), season=sub.season)
