@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
 from app.log import logger
+from app.modules.themoviedb import TmdbApi
 from app.modules.themoviedb.scraper import TmdbScraper
 from app.plugins import _PluginBase
 from app.schemas.types import MediaType
@@ -35,6 +36,11 @@ class SeasonCache:
         """获取指定季的信息，若不存在则返回 None"""
         if series := self.get(tmdbid):
             return next((s for s in series.seasons if s.season_number == season), None)
+
+    def season_info(self, tmdbid: int, season: int) -> dict:
+        if (series := self.get(tmdbid)) and series.has_season(season):
+            return series.season_info(season).to_dict()
+        return {}
 
     def org_season_episode(self, tmdbid: int, season: int, episode: int = None) -> Tuple[int, int, dict]:
         """
@@ -93,7 +99,7 @@ class SeasonSplitter:
         self.curetmdb = CureTMDb(self.ctmdb._source)
         self.bgm = BangumiAPIClient()
 
-    @cached(maxsize=500, ttl=60 * 60 * 8, skip_empty=True)
+    @cached(maxsize=500, ttl=60 * 60 * 8, skip_none=False)
     def seasons(self, mediainfo: MediaInfo) -> Optional[SeriesEntry]:
         # 优先使用本地
         seasons = self.curetmdb.season_info(mediainfo.tmdb_id)
@@ -175,10 +181,13 @@ class SeasonSplitter:
         tmdb_seasons = []
         for season in range(current_season, mediainfo.number_of_seasons + 1):
             try:
+                self.ctmdb.flag = True
                 if tmdb_season := self.ctmdb.chain.tmdb_info(mediainfo.tmdb_id, mediainfo.type, season):
                     tmdb_seasons.append(tmdb_season)
             except Exception as e:
                 logger.error(f"获取第 {season} 季信息失败: {str(e)}")
+            finally:
+                del self.ctmdb.flag
         if not tmdb_seasons:
             return None
         try:
@@ -258,7 +267,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.0"
+    plugin_version = "1.2.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -446,6 +455,8 @@ class CureTMDbAnime(_PluginBase):
         return {
             # 识别媒体信息
             "recognize_media": self.on_recognize_media,
+            # tmdb信息
+            "tmdb_info": self.on_tmdb_info,
             # 媒体集信息
             "tmdb_episodes": self.on_tmdb_episodes,
             # 刮削元数据
@@ -467,6 +478,9 @@ class CureTMDbAnime(_PluginBase):
             return False
 
         if mtype == MediaType.MOVIE:
+            return False
+
+        if tmdbid and not self.cache.get(tmdbid):
             return False
 
         return True
@@ -558,6 +572,9 @@ class CureTMDbAnime(_PluginBase):
         # 识别失败不处理
         if media_info is None:
             return None
+        # 只处理电视剧
+        if media_info.type != MediaType.TV:
+            return media_info
 
         if logic := self.splitter.from_tmdb(media_info):
             self.cache.put(media_info.tmdb_id, logic)
@@ -580,54 +597,108 @@ class CureTMDbAnime(_PluginBase):
 
         return media_info
 
-    def on_tmdb_episodes(self, tmdbid: int, season: int, episode_group: Optional[str] = None) -> Tuple[schemas.TmdbEpisode]:
+    def on_tmdb_info(self, tmdbid: int, mtype: MediaType, season: Optional[int] = None) -> Optional[dict]:
+        """
+        获取 TMDB 信息（支持电影/电视剧），并整合季/集信息。
+        :param tmdbid: TMDB ID
+        :param mtype: 媒体类型（MediaType.MOVIE / MediaType.TV）
+        :param season: 季号（仅限电视剧）
+        :return: 合并后的 TMDB 数据字典 或 None
+        """
+
+        if not self.is_eligible(tmdbid, mtype):
+            return None
+
+        # 获取真实季信息
+        unique_seasons = self.cache.unique_seasons(tmdbid=tmdbid, season=season)
+
+        # 收集所有相关季的信息
+        episodes: List[Dict] = []
+        latest_season_info: Dict = {}
+
+        for logic_season in unique_seasons:
+            if not logic_season:
+                continue
+
+            # 获取该季详细信息
+            if logic_season.type == "movie":
+                season_data = TmdbApi().get_info(
+                    mtype=MediaType.MOVIE, tmdbid=logic_season.tmdbid
+                )
+            else:
+                season_data = TmdbApi().get_tv_season_detail(
+                    tmdbid=logic_season.tmdbid or tmdbid,
+                    season=logic_season.season_number,
+                )
+
+            if not season_data:
+                logger.warning(
+                    f"无法获取 TMDB 季信息: {logic_season.tmdbid or tmdbid} - S{logic_season.season_number}"
+                )
+                continue
+
+            # 提取集列表
+            if season_data.get("season_number") is not None:
+                episodes.extend(season_data.get("episodes", []))
+                # 更新最新季信息
+                if (
+                    season_data.get("season_number", 0)
+                    > latest_season_info.get("season_number", 0)
+                ):
+                    latest_season_info = season_data
+            else:
+                episodes.append(season_data)
+
+        # 返回最终结果
+        if not latest_season_info and not episodes:
+            return None
+
+        # 整合额外的季信息
+        season_info = self.cache.season_info(tmdbid=tmdbid, season=season)
+
+        eps = self.cache.org_to_logic(tmdbid, season)
+
+        if not eps:
+            return {**latest_season_info, **season_info}
+
+        return {
+            **latest_season_info,
+            **season_info,
+            "episodes": [
+                {
+                    **{
+                        k: v
+                        for k, v in ep.items()
+                        if k not in {"season_number", "episode_number"}
+                    },
+                    "season_number": season,
+                    "episode_number": eps[_k][1],
+                }
+                for ep in episodes
+                if (
+                    _k := (
+                        ep.get("season_number") or "movie",
+                        ep.get("episode_number") or ep["id"],
+                    )
+                )
+                in eps
+            ],
+        }
+
+    def on_tmdb_episodes(self, tmdbid: int, season: int, episode_group: Optional[str] = None) -> Optional[Tuple[schemas.TmdbEpisode]]:
         """
         根据TMDBID查询某季的所有集信息
         :param tmdbid:  TMDBID
         :param season:  季
         :param episode_group:  剧集组
         """
-        if not self.is_eligible(episode_group=episode_group):
+        if not self.is_eligible(tmdbid=tmdbid, episode_group=episode_group):
             return None
 
-        unique_seasons = self.cache.unique_seasons(tmdbid, season)
-        tmdb_info = [
-            info
-            for entry in unique_seasons
-            if (
-                info := self.chain.tmdb_info(
-                    tmdbid=entry.tmdbid or tmdbid,
-                    mtype=MediaType.MOVIE if entry.type == "movie" else MediaType.TV,
-                    season=entry.season_number,
-                )
-            )
-        ]
+        tmdb_info = self.chain.tmdb_info(tmdbid, MediaType.TV, season)
         if not tmdb_info:
             return None
-        eps = self.cache.org_to_logic(tmdbid, season)
-        if not eps:
-            return None
-
-        return (
-            schemas.TmdbEpisode(
-                **{
-                    k: v
-                    for k, v in ep.items()
-                    if k not in {"season_number", "episode_number"}
-                },
-                season_number=season,
-                episode_number=eps[_k][1],
-            )
-            for info in tmdb_info
-            for ep in info.get("episodes") or [info]
-            if (
-                _k := (
-                    ep.get("season_number") or "movie",
-                    ep.get("episode_number") or ep["id"],
-                )
-            )
-            in eps
-        )
+        return (schemas.TmdbEpisode(**ep) for ep in tmdb_info.get("episodes", []))
 
     def on_metadata_nfo(self, meta: MetaBase, mediainfo: MediaInfo,
                      season: Optional[int] = None, episode: Optional[int] = None) -> Optional[str]:
@@ -638,7 +709,7 @@ class CureTMDbAnime(_PluginBase):
         :param season: 季号
         :param episode: 集号
         """
-        if not self.is_eligible(mtype=mediainfo.type):
+        if not self.is_eligible(mediainfo.tmdb_id, mediainfo.type, mediainfo.episode_group):
             return None
         org_sea, org_ep, info = self.cache.org_season_episode(mediainfo.tmdb_id, season, episode)
 
@@ -667,14 +738,14 @@ class CureTMDbAnime(_PluginBase):
         return None
 
     def on_metadata_img(self, mediainfo: MediaInfo, season: Optional[int] = None,
-                         episode: Optional[int] = None) -> dict:
+                         episode: Optional[int] = None) -> Optional[dict]:
         """
         获取图片名称和url
         :param mediainfo: 媒体信息
         :param season: 季号
         :param episode: 集号
         """
-        if not self.is_eligible(mtype=mediainfo.type):
+        if not self.is_eligible(mediainfo.tmdb_id, mediainfo.type, mediainfo.episode_group):
             return None
 
         images = {}
@@ -725,7 +796,7 @@ class CureTMDbAnime(_PluginBase):
             return images
 
     def on_tmdb_seasons(self, tmdbid: int):
-        if not self.is_eligible():
+        if not self.is_eligible(tmdbid=tmdbid):
             return None
 
         if logic := self.cache.get(tmdbid):

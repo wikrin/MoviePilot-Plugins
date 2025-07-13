@@ -142,7 +142,7 @@ class BangumiAPIClient:
                     else:
                         bgm_seasons[num].episode_count += eps
 
-            return SeriesEntry(seasons=list(bgm_seasons.values())) if bgm_seasons else None
+            return SeriesEntry(seasons=list(bgm_seasons.values())) if len(bgm_seasons) < 2 else None
 
         except Exception as e:
             logger.error(f"[Bangumi] 构建季信息失败: {str(e)}")
