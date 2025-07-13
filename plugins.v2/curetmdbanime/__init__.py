@@ -102,7 +102,7 @@ class SeasonSplitter:
             [
                 not seasons,
                 mediainfo.category == self.ctmdb._category,
-                mediainfo.number_of_seasons < 3,
+                mediainfo.number_of_seasons and mediainfo.number_of_seasons < 3,
             ]
         ):
             # 如果未找到季信息且媒体信息显示有2季
@@ -238,7 +238,7 @@ class SeasonSplitter:
             date2 = datetime.strptime(date_str2, "%Y-%m-%d")
             diff = abs((date2 - date1).days)
             return diff <= days_range
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             # 日期格式错误或无法解析
             logger.error(f"日期格式错误: {e}")
             return False
