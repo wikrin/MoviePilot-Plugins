@@ -269,7 +269,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.5"
+    plugin_version = "1.2.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -595,15 +595,16 @@ class CureTMDbAnime(_PluginBase):
             media_info = None
         finally:
             del self.flag
-        # 识别失败不处理
+        # 识别失败，阻止run_module继续执行
         if media_info is None:
-            return None
+            return False
         # 只处理电视剧
         if media_info.type != MediaType.TV:
             return media_info
 
-        if logic := self.splitter.from_tmdb(media_info):
+        if logic := self.splitter.from_tmdb(media_info) or self.cache.get(media_info.tmdb_id):
             self.cache.put(media_info.tmdb_id, logic)
+
             seasons_info = logic.seasons_info
             seasons = logic.seasons_eps(self._use_cont_eps)
             season_years = {}
