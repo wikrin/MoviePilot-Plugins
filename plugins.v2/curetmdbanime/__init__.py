@@ -6,7 +6,6 @@ from typing import Any, Optional, Dict, List, Tuple
 
 # 项目库
 from app import schemas
-from app.core.cache import cached
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
@@ -77,7 +76,6 @@ class SeasonCache:
         """
         获取原始季映射关系
         :param tmdbid: 媒体 TMDB ID
-        :param use_cont_eps: 是否使用连续集号
         """
         if logic := self.get(tmdbid):
             return logic.org_map(self.use_cont_eps)
@@ -99,56 +97,55 @@ class SeasonSplitter:
         self.curetmdb = CureTMDb(self.ctmdb._source)
         self.bgm = BangumiAPIClient()
 
-    @cached(maxsize=500, ttl=60 * 60 * 8, skip_none=False)
-    def seasons(self, mediainfo: MediaInfo) -> Optional[SeriesEntry]:
-        # 优先使用本地
-        seasons = self.curetmdb.season_info(mediainfo.tmdb_id)
-
-        if all(
-            [
-                not seasons,
-                mediainfo.category == self.ctmdb._category,
-                mediainfo.number_of_seasons and mediainfo.number_of_seasons < 3,
-            ]
-        ):
-            # 如果未找到季信息且媒体信息显示有2季
-            if mediainfo.number_of_seasons == 2:
-                # 查找Bangumi条目并验证是否符合合并条件
-                item = self._search_by_mediainfo(mediainfo, season=2)
-                result = item and self.bgm.get_sort_and_ep(item["id"])
-                if result and result[0] == result[1]:
-                    return
-
-            # 若仍未找到季信息，则从Bangumi获取
-            item = self._search_by_mediainfo(mediainfo)
-            seasons = self.bgm.season_info(item)
-
-        return seasons
-
-    @cached(maxsize=100, ttl=500, skip_empty=True)
-    def from_tmdb(self, mediainfo: MediaInfo):
+    def from_tmdb(self, mediainfo: MediaInfo) -> Optional[LogicSeries]:
         """
         根据 TMDB 和 Bangumi 数据构建逻辑季信息。
         """
-        if seasons := self.seasons(mediainfo):
-            # 拆分季
-            logic_series = self._logic_seasons(mediainfo, seasons)
-            return logic_series
+        season_count = mediainfo.number_of_seasons
 
-    def _search_by_mediainfo(self, mediainfo: MediaInfo, season: Optional[int] = None) -> Optional[dict]:
-        if season is None:
-            air_date = mediainfo.release_date
-        else:
-            air_date = next(
-                (
-                    info.get("air_date")
-                    for info in mediainfo.season_info
-                    if info.get("season_number") == season
-                ),
-                mediainfo.release_date,
-            )
+        def air_date(season: Optional[int] = None) -> Optional[str]:
+                if season is None:
+                    air_date = mediainfo.release_date
+                else:
+                    air_date = next(
+                        (
+                            info.get("air_date")
+                            for info in mediainfo.season_info
+                            if info.get("season_number") == season
+                        ),
+                        mediainfo.release_date,
+                    )
+                return air_date
+
+        def ctmdb_derive() -> Optional[SeriesEntry]:
+            if result := self.curetmdb.season_info(mediainfo.tmdb_id):
+                return SeriesEntry(**result)
+
+        def bangumi_derive() -> Optional[SeriesEntry]:
+            if mediainfo.category != self.ctmdb._category:
+                return None
+
+            if season_count and season_count < 3:
+                # 如果未找到季信息且媒体信息显示有2季
+                if season_count == 2:
+                    # 查找Bangumi条目并验证是否符合合并条件
+                    item = self._search_subjects(mediainfo.original_title, air_date(2))
+                    result = item and self.bgm.get_sort_and_ep(item["id"])
+                    if result and result[0] == result[1]:
+                        return None
+                # 若仍未找到季信息，则从Bangumi获取
+                item = self._search_subjects(mediainfo.original_title, air_date())
+                return self.bgm.season_info(item)
+
+        seasons = ctmdb_derive()
+        if not seasons:
+            seasons = bangumi_derive()
+        if seasons:
+            return self._logic_seasons(mediainfo, seasons)
+
+    def _search_subjects(self, title: str, air_date: Optional[int] = None) -> Optional[dict]:
         try:
-            result = self.bgm.search(mediainfo.original_title, air_date)
+            result = self.bgm.search(title, air_date)
             return next((item for item in result if item.get("platform") == "TV"), None)
         except Exception as e:
             logger.error(f"Bangumi search error: {e}")
@@ -163,20 +160,20 @@ class SeasonSplitter:
             ):
                 logger.info(f"忽略重复的季: {current_season}: 已存在总集数: {seasons[current_season].episode_count}, 新的总集数: {len(mapping)}")
                 return  # 保留集数多的
+            name = name or tmdb_season.get("name")
 
-            logger.info(f"添加季: {current_season}, 总集数: {len(mapping)}")
+            logger.info(f"{mediainfo.tmdb_id} {mediainfo.title_year}: {name}, 集数: {len(mapping)}")
             logic_series.add_season(
                     name=name,
                     air_date=air_date,
                     season_number=current_season,
                     episodes_map=mapping,
-                    **mediainfo.to_dict()
+                    **{k: v for k, v in tmdb_season.items() if k not in {"name", "air_date", "season_number"}},
                 )
 
         mapping = series.episode_mapping
         missing_eps = series.missing_episodes_by_season
         current_season = series.min_season
-        max_season = series.max_season
 
         tmdb_seasons = []
         for season in range(current_season, mediainfo.number_of_seasons + 1):
@@ -206,8 +203,8 @@ class SeasonSplitter:
 
                 logic_ep = (
                     missing_eps[current_season].pop(0)
-                    if missing_eps[current_season]
-                    else None
+                    if missing_eps.get(current_season)
+                    else logic_ep + 1
                 )
 
                 if current_season not in mapping:
@@ -218,19 +215,24 @@ class SeasonSplitter:
                         order=logic_ep, **ep
                     )
 
-                if any([
-                    not missing_eps[current_season],
+                while any((
+                    missing_eps.get(current_season) == [],
                     # ep.get("episode_type") == "finale",
-                    uniqueid == last_episode
-                ]):
-                    append(series.season_names[current_season], mapping=mapping[current_season])
+                    is_last := (uniqueid == last_episode),
+                )):
+                    append(series.season_names.get(current_season), mapping=mapping.get(current_season, {}))
                     current_season += 1
                     air_date = None
-
-                if current_season > max_season:
-                    return logic_series
+                    logic_ep = 0
+                    if is_last:
+                        break
 
         return logic_series
+
+    def clear(self):
+        """清理缓存"""
+        self.curetmdb.clear()
+        self.bgm.clear()
 
     @staticmethod
     def is_date_diff_within(date_str1: str, date_str2: str, days_range: int = 3) -> bool:
@@ -267,7 +269,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.1"
+    plugin_version = "1.2.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -287,6 +289,15 @@ class CureTMDbAnime(_PluginBase):
     _category: Optional[str] = "日番"
     _source: Optional[str] = ""
     _use_cont_eps: bool = False
+    _clear_cache: bool = False
+
+    CONFIG_KEYS = (
+            "enabled",
+            "category",
+            "source",
+            "use_cont_eps",
+            "clear_cache",
+        )
 
     @property
     def flag(self) -> bool:
@@ -319,18 +330,28 @@ class CureTMDbAnime(_PluginBase):
         self.cache = SeasonCache(self._use_cont_eps)
         self.splitter = SeasonSplitter(self)
         self.scraper = TmdbScraper()
+        if self._clear_cache:
+            self._clear()
+            self.__update_config()
 
     def load_config(self, config: dict):
         """加载配置"""
         if config:
             # 遍历配置中的键并设置相应的属性
-            for key in (
-                "enabled",
-                "category",
-                "source",
-                "use_cont_eps",
-            ):
+            for key in self.CONFIG_KEYS:
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
+
+    def _clear(self):
+        try:
+            self.splitter.clear()
+        except Exception as e:
+            logger.error(f"缓存清理失败: {e}")
+        finally:
+            self._clear_cache = False
+
+    def __update_config(self):
+        """更新设置"""
+        self.update_config({key: getattr(self, f"_{key}") for key in self.CONFIG_KEYS})
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
@@ -370,10 +391,7 @@ class CureTMDbAnime(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -386,10 +404,7 @@ class CureTMDbAnime(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -402,24 +417,20 @@ class CureTMDbAnime(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {
-                                    'cols': 12,
-                                    'md': 4
-                                },
+                                'props': {'cols': 12, 'md': 4},
                                 'content': [
                                     {
-                                        'component': 'VSelect',
+                                        'component': 'VSwitch',
                                         'props': {
-                                            'model': 'category',
-                                            'label': 'Bangumi兜底类别',
-                                            'items': tv_categories,
-                                        },
+                                            'model': 'clear_cache',
+                                            'label': '清理缓存',
+                                        }
                                     }
                                 ]
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 12},
+                                'props': {'cols': 12, 'md': 9},
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -431,6 +442,20 @@ class CureTMDbAnime(_PluginBase):
                                     }
                                 ],
                             },
+                            {
+                                'component': 'VCol',
+                                'props': {'cols': 12, 'md': 3},
+                                'content': [
+                                    {
+                                        'component': 'VSelect',
+                                        'props': {
+                                            'model': 'category',
+                                            'label': 'Bangumi兜底类别',
+                                            'items': tv_categories,
+                                        },
+                                    }
+                                ]
+                            },
                         ]
                     },
                 ]
@@ -440,6 +465,7 @@ class CureTMDbAnime(_PluginBase):
             "category" : "日番",
             "source": "https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
             "use_cont_eps": False,
+            "clear_cache": False,
         }
 
     def get_page(self):
@@ -592,6 +618,10 @@ class CureTMDbAnime(_PluginBase):
             # 每季年份
             if season_years:
                 media_info.season_years = season_years
+            if logic.name and media_info.title != logic.name:
+                logger.info(f"{tmdbid} 标题已调整 {media_info.title} -> {logic.name}")
+                media_info.title = logic.name
+
             media_info.season_info = seasons_info
             self.correct_meta(meta, media_info)
 
@@ -661,28 +691,35 @@ class CureTMDbAnime(_PluginBase):
         if not eps:
             return {**latest_season_info, **season_info}
 
+        def convert_episode(ep: dict):
+            raw_season = ep.pop("season_number", None)
+            raw_episode = ep.pop("episode_number", None) or ep.get("id")
+            _k = ("movie" if raw_season is None else raw_season), raw_episode
+
+            if _k not in eps:
+                return None
+
+            logic_season, logic_episode = eps[_k]
+            air_date = ep.pop("air_date", None) or ep.pop("release_date", None)
+            name = ep.pop("name", None) or ep.pop("title", None)
+
+            return {
+                "air_date": air_date,
+                "name": name,
+                "season_number": logic_season,
+                "episode_number": logic_episode,
+                **ep,
+            }
+
+        # 过滤与替换
+        filtered = [e for e in (convert_episode(ep) for ep in episodes) if e is not None]
+        # 排序
+        sorted_episodes = sorted(filtered, key=lambda x: x.get("episode_number", 0))
+
         return {
             **latest_season_info,
             **season_info,
-            "episodes": [
-                {
-                    **{
-                        k: v
-                        for k, v in ep.items()
-                        if k not in {"season_number", "episode_number"}
-                    },
-                    "season_number": season,
-                    "episode_number": eps[_k][1],
-                }
-                for ep in episodes
-                if (
-                    _k := (
-                        ep.get("season_number") or "movie",
-                        ep.get("episode_number") or ep["id"],
-                    )
-                )
-                in eps
-            ],
+            "episodes": sorted_episodes,
         }
 
     def on_tmdb_episodes(self, tmdbid: int, season: int, episode_group: Optional[str] = None) -> Optional[Tuple[schemas.TmdbEpisode]]:

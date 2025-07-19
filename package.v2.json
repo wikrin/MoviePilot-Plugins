@@ -81,17 +81,16 @@
       "name": "CTMDbA",
       "description": "对 TMDb 上被合并为一季的番剧进行季信息分离。",
       "labels": "识别, 刮削",
-      "version": "1.2.1",
+      "version": "1.2.5",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
       "author": "Attente",
       "level": 1,
       "history": {
-        "1.2.1": "扩大季分离覆盖范围",
+        "1.2.5": "修复部分错误",
+        "1.2.4": "优化缓存, 预分离新季",
         "1.2.0": "增加连续集号选项开关",
         "1.1.6": "修复季标题刮削错误的问题",
-        "1.1.5": "修复某些情况下刮削报错的问题",
-        "1.1.4": "修复部分错误",
-        "1.0.0": "增加本地或远程文件自定义分离"
+        "1.1.5": "修复某些情况下刮削报错的问题"
       }
     },
     "FollowUp": {

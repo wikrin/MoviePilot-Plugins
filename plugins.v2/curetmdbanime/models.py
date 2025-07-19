@@ -69,8 +69,11 @@ class SeasonEntry(BaseModel):
         """返回包含的集号集合（order）"""
         if not self.include:
             return set()
-        return {item.order for item in self.include}
-
+        return {
+            order
+            for item in self.include
+            for order in range(item.order, item.order + item.count)
+        }
     @property
     def included_episodes(self) -> dict[int, EpisodeMap]:
         """返回 order -> episode 数据的映射表"""
@@ -157,7 +160,7 @@ class LogicSeason(BaseModel):
     # 季号
     season_number: int = 1
     # 映射
-    episodes_map: Optional[Dict[int, EpisodeMap]] = None
+    episodes_map: Dict[int, EpisodeMap] = Field(default_factory=dict)
     # 评分
     vote_average: Optional[float] = None
     # 海报
@@ -252,11 +255,13 @@ class LogicSeries(BaseModel):
                 air_date=air_date,
                 season_number=season_number,
                 episodes_map=episodes_map,
+                vote_average=kwargs.pop("vote_average") or self.vote_average,
+                poster_path=kwargs.pop("poster_path") or self.poster_path,
                 **kwargs,
             )
         )
 
-    def has_season(self, season_number):
+    def has_season(self, season_number) -> bool:
         for season in self.seasons:
             if season.season_number == season_number:
                 return True

@@ -1,12 +1,10 @@
 import json
 from pathlib import Path
-from typing import Optional
 
+from app.core.cache import cached
 from app.core.config import settings
 from app.log import logger
 from app.utils.http import RequestUtils
-
-from .models import SeriesEntry
 
 
 SAVE_PATH = settings.TEMP_PATH / "curetmdb.json"
@@ -54,16 +52,15 @@ class CureTMDb:
             logger.error(f"获取远程季信息失败: {str(e)}")
             return False
 
-    def season_info(self, tmdbid: int) -> Optional[SeriesEntry]:
+    @cached(ttl=60 * 60 * 2)
+    def season_info(self, tmdbid: int) -> dict:
         """
-        从本地 JSON 加载季信息，用于替代 Bangumi 查询。
-
-        :param mediainfo: 媒体信息对象
-        :return: 构建好的 bgm_seasons 字典（格式：{season_num: episode_count}）
+        从本地 JSON 加载季信息
+        :return: dict
         """
         if not self.path.exists():
             logger.warning("信息文件不存在")
-            return None
+            return {}
 
         try:
             with open(self.path, 'r', encoding='utf-8') as f:
@@ -71,14 +68,18 @@ class CureTMDb:
             tmdbid = str(tmdbid)
             if tmdbid not in local_data:
                 logger.debug(f"未在本地季信息中找到 TMDB ID {tmdbid}")
-                return None
+                return {}
 
-            return SeriesEntry(**local_data[tmdbid])
+            return local_data[tmdbid]
 
         except Exception as e:
             logger.error(f"读取本地季信息失败: {str(e)}")
             return None
 
+    def clear(self):
+        self.season_info.cache_clear()
+
     @property
     def remote_mode(self) -> bool:
         return getattr(self, "is_remote", False)
+

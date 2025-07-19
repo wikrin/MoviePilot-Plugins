@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 
+from app.core.cache import cached
 from app.log import logger
 from app.utils.http import RequestUtils
 
@@ -28,6 +29,7 @@ class BangumiAPIClient:
         self._session = requests.Session()
         self._req = RequestUtils(session=self._session)
 
+    @cached(maxsize=1024, ttl=60 * 60 * 6)
     def __invoke(self, method, url, key: Optional[str] = None, data: Any = None, json: dict = None, **kwargs):
         req_url = self._base_url + url
         req_method = {
@@ -60,15 +62,16 @@ class BangumiAPIClient:
         start_date = _air_date - timedelta(days=10)
         end_date = _air_date + timedelta(days=10)
         json = {
-                "keyword": re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9—―\- ]", "", title),
+                "keyword": re.sub(r"[\u2000-\u206f\u3000-\u303f\uff00-\uffef\W_]", "", title),
                 "sort": "match",
                 "filter": {
                     "type": [2],
                     "air_date": [f">={start_date}", f"<={end_date}"]
                 },
             }
-        result = self.__invoke("post", self._urls["search"], json=json)
-        return result.get("data") or []
+        if result := self.__invoke("post", self._urls["search"], json=json):
+            return result.get("data") or []
+        return []
 
     def detail(self, bid: int) -> Optional[dict]:
         """
@@ -108,9 +111,9 @@ class BangumiAPIClient:
                 if item.get("relation") == "续集":
                     _recursive_fetch(item["id"])
 
-
         _recursive_fetch(bid)
 
+        logger.debug(f"{bid} 获取到关联条目数 {len(result)} : {result}")
         return result
 
     def season_info(self, item: dict) -> Optional[SeriesEntry]:
@@ -142,10 +145,11 @@ class BangumiAPIClient:
                     else:
                         bgm_seasons[num].episode_count += eps
 
-            return SeriesEntry(seasons=list(bgm_seasons.values())) if len(bgm_seasons) < 2 else None
+            return SeriesEntry(seasons=list(bgm_seasons.values())) if len(bgm_seasons) >= 2 else None
 
         except Exception as e:
-            logger.error(f"[Bangumi] 构建季信息失败: {str(e)}")
+            logger.error(f"构建季信息失败: {str(e)}")
+            return None
 
     def get_sort_and_ep(self, sid: int) -> Optional[Tuple[int, int]]:
         """
@@ -161,6 +165,8 @@ class BangumiAPIClient:
             episode = result["data"][0]
             sort = episode.get("sort")
             ep = episode.get("ep")
+
+            logger.debug(f"获取 {sid} 的 sort 和 ep 值: {sort}, {ep}")
 
             if sort is None or ep is None:
                 return None
@@ -222,6 +228,12 @@ class BangumiAPIClient:
         else:
             # 都没找到，默认第一季
             return 1
+
+    def clear(self):
+        """
+        清除cached缓存
+        """
+        self.__invoke.cache_clear()
 
     def close(self):
         if self._session:
