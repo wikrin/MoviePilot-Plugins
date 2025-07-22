@@ -34,7 +34,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.0.1"
+    plugin_version = "1.1.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -55,6 +55,7 @@ class FollowUp(_PluginBase):
     _threshold_years: int = 15
     _cron: str = ""
     _onlyonce: bool = False
+    _check_sub_history: bool = True
     _libraries: list = []
     _save_path: str = ""
     _sites: list = []
@@ -65,6 +66,7 @@ class FollowUp(_PluginBase):
         "threshold_years",
         "cron",
         "onlyonce",
+        "check_sub_history",
         "libraries",
         "save_path",
         "sites",
@@ -182,6 +184,19 @@ class FollowUp(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
+                                'props': {'cols': 6, 'md': 4},
+                                'content': [
+                                    {
+                                        'component': 'VSwitch',
+                                        'props': {
+                                            'model': 'check_sub_history',
+                                            'label': '检查订阅历史',
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                'component': 'VCol',
                                 'props': {'cols': 6, 'md': 3},
                                 'content': [
                                     {
@@ -284,6 +299,7 @@ class FollowUp(_PluginBase):
             "threshold_years": 15,
             "cron": "",
             "onlyonce": False,
+            "check_sub_history": True,
             "libraries": [],
             "save_path": "",
             "sites": [],
@@ -336,6 +352,26 @@ class FollowUp(_PluginBase):
 
     def get_state(self):
         return self._enabled
+
+    @eventmanager.register(EventType.PluginAction)
+    def action_event_handler(self, event: Event):
+        """
+        远程命令处理
+        """
+        event_data = event.event_data
+        if not event_data or event_data.get("action") != "follow_up":
+            return
+
+        self.post_message(channel=event_data.get("channel"),
+                          title=f"【续作跟进】开始执行 ...",
+                          userid=event_data.get("user"))
+        # 运行任务
+        self.follow_up()
+
+        self.post_message(channel=event_data.get("channel"),
+                          title="【续作跟进】执行完成",
+                          userid=event_data.get("user"))
+
 
     def follow_up(self):
         # 获取忽略列表
@@ -390,12 +426,20 @@ class FollowUp(_PluginBase):
         if not self.is_date_in_range(air_date, threshold_days=self._after_days):
             return
 
-        msg_title = f"{mediainfo.title_year} 下一集 即将播出"
+        # 获取季号和集号
+        season_number = next_episode.get("season_number", 1)
+        episode_number = next_episode.get("episode_number", 1)
+
+        # 补零格式化
+        season_number_str = f"S{season_number:02d}"
+        episode_number_str = f"E{episode_number:02d}"
+
+        msg_title = f"🆕 {mediainfo.title_year} {season_number_str}{episode_number_str} 即将播出"
         msg_text = (
-            f"最新话：{next_episode['name'] or '第 '+next_episode['episode_number']+' 集'}\n"
-            f"日期：{air_date[:10]}\n\n"
-            f"📌 是否订阅该系列的最新作品？"
-            )
+            f"🎬 标题：{next_episode['name'] or '暂无标题'}\n"
+            f"📅 播出日期：{air_date[:10]}\n"
+            f"👉 是否订阅该系列的最新作品？\n"
+        )
 
         self._send_menu_message(mediainfo, msg_title, msg_text)
 
@@ -411,11 +455,10 @@ class FollowUp(_PluginBase):
             if not collection_info:
                 continue
 
-            logger.info(f"开始处理合集：{followinfo.get('name') or collection_id}")
             collection_parts = followinfo.get("parts") or []
             latest_release_date = followinfo.get("latest_release_date") or "0000-00-00"
-            if len(collection_info) < len(collection_parts):
-                logger.info(f"{followinfo.get('name') or collection_id} 没有新的系列电影")
+            if len(collection_info) == len(collection_parts):
+                logger.info(f"{followinfo.get('name') or collection_id} 电影数: {len(collection_info)} 与记录数一致, 等待下次检查")
                 continue
 
             # 查找最新电影
@@ -449,12 +492,12 @@ class FollowUp(_PluginBase):
             if not next_air_date or not self.is_date_in_range(next_air_date, threshold_days=self._after_days):
                 continue
 
-            msg_title = f"{followinfo.get("name")} 有新的电影即将上线！"
+            msg_title = f"🆕 {followinfo.get("name")} 有新的电影即将上线！"
             msg_text = (
-                f"最新电影：{latest_part.title_year}\n"
+                f"🎬 最新电影：{latest_part.title_year}\n"
                 f"{msg}\n"
-                f"日期：{next_air_date[:10]}\n\n"
-                f"📌 是否订阅该系列的最新作品？"
+                f"📅 日期：{next_air_date[:10]}\n\n"
+                f"👉 是否订阅该系列的最新作品？"
                 )
 
             self._send_menu_message(latest_part, msg_title, msg_text)
@@ -469,7 +512,7 @@ class FollowUp(_PluginBase):
 
         collection_id = tmdb_info["belongs_to_collection"].get("id")
         if not collection_id:
-            logger.warn(f"{mediainfo.tmdb_id} {mediainfo.title_year} 未获取到所属合集ID, 等待下次尝试")
+            logger.warn(f"{mediainfo.tmdb_id} {mediainfo.title_year} 未获取到所属合集ID, 等待下次检查")
 
         return collection_id, tmdb_info["belongs_to_collection"].get("name")
 
@@ -531,10 +574,14 @@ class FollowUp(_PluginBase):
         # 媒体服务器
         serveritems = self.get_media_server_items(exclude=ignore)
         # 订阅历史
-        subscribehis = {
-            (sub.type, sub.tmdbid)
-            for sub in self.get_subscribe_history(exclude=ignore)
-        }
+        subscribehis = (
+            {
+                (sub.type, sub.tmdbid)
+                for sub in self.get_subscribe_history(exclude=ignore)
+            }
+            if self._check_sub_history # 是否检查订阅历史
+            else set()
+        )
         # 去重
         return serveritems.union(subscribehis)
 
@@ -544,6 +591,8 @@ class FollowUp(_PluginBase):
         处理消息按钮回调
         """
         event_data = event.event_data
+        logger.debug(f"收到消息回调: {event_data}")
+
         if not event_data:
             return
 
@@ -614,7 +663,7 @@ class FollowUp(_PluginBase):
                         {"text": "💤 忽略", "callback_data": f"[PLUGIN]{self.__class__.__name__}|ignore|{_key}"}
                     ],
                 ]
-        if msg and not sid:
+        if msg:
             self.post_message(
                 channel=channel,
                 title="添加订阅失败",
@@ -679,6 +728,27 @@ class FollowUp(_PluginBase):
                         items.add(_key)
         return items
 
+    def clean_media_info(self, mediainfo: MediaInfo) -> dict:
+        """
+        清洗 mediainfo 对象，仅保留关键字段用于存储或传输
+        """
+        if not mediainfo:
+            return {}
+        season = mediainfo.number_of_seasons
+        # 查询订阅历史
+        history = self.get_subscribe_history(tmdbid=mediainfo.tmdb_id, type=mediainfo.type)
+        total_episode = next((item.total_episode for item in history if item.season == season), 0)
+        return {
+            'title': mediainfo.title,
+            'year': mediainfo.year,
+            "tmdbid": mediainfo.tmdb_id,
+            "doubanid": mediainfo.douban_id,
+            "bangumiid": mediainfo.bangumi_id,
+            "episode_group": mediainfo.episode_group,
+            "season": season,
+            "start_episode": total_episode + 1 if total_episode else 0,
+            }
+
     @eventmanager.register(EventType.SiteDeleted)
     def site_deleted(self, event: Event):
         """
@@ -717,10 +787,14 @@ class FollowUp(_PluginBase):
         self.save_collections(collections)
 
     @db_query
-    def get_subscribe_history(self, db: Session = None, exclude: set[tuple] = set()) -> list[SubscribeHistory]:
+    def get_subscribe_history(self, db: Session = None, tmdbid: int =None, type: MediaType = None, exclude: set[tuple] = set()) -> list[SubscribeHistory]:
         """获取已完成的订阅"""
         query = db.query(SubscribeHistory)
         conditions = []
+        if tmdbid:
+            conditions.append(SubscribeHistory.tmdbid == tmdbid)
+        if type:
+            conditions.append(SubscribeHistory.type == type.value)
         if exclude:
             conditions.append(tuple_(SubscribeHistory.type, SubscribeHistory.tmdbid).notin_(exclude))
         try:
@@ -743,24 +817,6 @@ class FollowUp(_PluginBase):
         except Exception as e:
             print(f"解析key失败: {key_str}, 错误: {str(e)}")
             return None
-
-    @staticmethod
-    def clean_media_info(mediainfo: MediaInfo) -> dict:
-        """
-        清洗 mediainfo 对象，仅保留关键字段用于存储或传输
-        """
-        if not mediainfo:
-            return {}
-
-        return {
-            'title': mediainfo.title,
-            'year': mediainfo.year,
-            "tmdbid": mediainfo.tmdb_id,
-            "doubanid": mediainfo.douban_id,
-            "bangumiid": mediainfo.bangumi_id,
-            "episode_group": mediainfo.episode_group,
-            "season": mediainfo.number_of_seasons
-            }
 
     @staticmethod
     def movie_release_info(iso_code: str, note, type_id) -> str:
@@ -856,4 +912,3 @@ class FollowUp(_PluginBase):
         except (ValueError, TypeError) as e:
             logger.error(f"日期格式错误: {str(e)}")
             return False
-
