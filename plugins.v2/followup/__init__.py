@@ -1,6 +1,9 @@
 # 基础库
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 第三方库
 import pytz
@@ -34,7 +37,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.1.3"
+    plugin_version = "1.1.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -48,6 +51,9 @@ class FollowUp(_PluginBase):
 
     # 私有属性
     _scheduler = None
+    _last_request_time = 0
+    _request_lock = threading.Lock()
+    _min_interval = 0.025
 
     # 配置属性
     _enabled: bool = False
@@ -77,6 +83,8 @@ class FollowUp(_PluginBase):
         # 停止现有任务
         self.stop_service()
         self.load_config(config)
+
+        self.tmdbapi = TmdbApi()
 
         if self._onlyonce:
             self.schedule_once()
@@ -372,6 +380,39 @@ class FollowUp(_PluginBase):
                           title="【续作跟进】执行完成",
                           userid=event_data.get("user"))
 
+    def _fetch_tmdb_info(self, mtype: str, tmdbid: int) -> Optional[dict]:
+
+        # 添加速率限制
+        with self._request_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_request_time = time.time()
+
+        try:
+            if mtype == MediaType.MOVIE.value:
+                if details := self.tmdbapi.movie.details(tmdbid):
+                    return {
+                        "title_year": f"{details.get('title')} ({details.get('release_date')[:4]})",
+                        "type": MediaType.MOVIE,
+                        "tmdb_id": tmdbid,
+                        "release_date": details.get("release_date"),
+                        "belongs_to_collection": details.get("belongs_to_collection")
+                    }
+            elif mtype == MediaType.TV.value:
+                if details := self.tmdbapi.tv.details(tmdbid):
+                    return {
+                        "title_year": f"{details.get('name')} ({details.get('first_air_date')[:4]})",
+                        "type": MediaType.TV,
+                        "tmdb_id": tmdbid,
+                        "last_air_date": details.get("last_air_date"),
+                        "next_episode_to_air": details.get("next_episode_to_air")
+                    }
+            return None
+        except Exception as e:
+            logger.debug(f"获取TMDB信息失败 ({mtype} {tmdbid}): {e}")
+            return None
 
     def follow_up(self):
         # 获取忽略列表
@@ -380,20 +421,65 @@ class FollowUp(_PluginBase):
         collections = self.get_collections()
         # 获取需要跟进的媒体
         his = self._need_follow_up(_ignore, collections)
+        if not his:
+            logger.info("没有需要跟进的媒体项。")
+            return
 
-        self._process_media_items(his, _ignore, collections)
+        self._filter_media(his, _ignore, collections)
 
         if collections:
             self.collection_follow_up(collections, _ignore)
-            self.save_collections(collections)
 
-    def _process_media_items(self, his: set, _ignore: set, collections: dict):
-        """处理每个媒体项"""
-        for k in his:
-            if k in _ignore:
-                continue
+        self.save_collections(collections)
+        self.save_ignore_keys(_ignore)
+        logger.info("续作跟进执行完成。")
 
-            mediainfo = self.chain.recognize_media(mtype=MediaType(k[0]), tmdbid=k[1])
+    def _filter_media(self, his: set, _ignore: set, collections: dict):
+
+        logger.info(f"开始对 {len(his)} 个条目进行预检...")
+
+        items_for_full_recognition = []
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            future_to_key = {
+                executor.submit(self._fetch_tmdb_info, k[0], k[1]): k
+                for k in his
+            }
+            _collection_ids = set()
+            for future in as_completed(future_to_key):
+                key = future_to_key[future]
+                min_info = future.result()
+
+                if not min_info:
+                    continue
+
+                # 电视剧或非系列电影检查年限
+                if not min_info.get("belongs_to_collection"):
+                    air_date = min_info.get("last_air_date") or min_info.get("release_date")
+                    if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
+                        logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self._threshold_years} 年，不再跟进")
+                        _ignore.add(key)
+                        continue
+
+                # 检查具体更新
+                if min_info["type"] == MediaType.TV:
+                    next_episode = min_info.get("next_episode_to_air")
+                    if next_episode and self.is_date_in_range(next_episode.get("air_date"), threshold_days=self._after_days):
+                        items_for_full_recognition.append(key)
+
+                elif min_info["type"] == MediaType.MOVIE:
+                    collection = min_info.get("belongs_to_collection")
+                    if collection and collection["id"] not in _collection_ids:
+                        _collection_ids.add(collection["id"])
+                        items_for_full_recognition.append(key)
+
+        logger.info(f"发现 {len(items_for_full_recognition)} 个有价值的条目。")
+
+        if not items_for_full_recognition:
+            return
+
+        for mtype, tmdbid in items_for_full_recognition:
+
+            mediainfo = self.chain.recognize_media(mtype=MediaType(mtype), tmdbid=tmdbid)
             if not mediainfo:
                 continue
 
@@ -412,18 +498,12 @@ class FollowUp(_PluginBase):
             collections[str(collection_id)] = {"follow_up": True, "name": collection_name}
             logger.info(f"{mediainfo.tmdb_id} {mediainfo.title_year} 添加至系列合集 {collection_id} {collection_name}")
 
-    def _handle_tv_show(self, mediainfo: MediaInfo, _ignore: set) -> bool:
+    def _handle_tv_show(self, mediainfo: MediaInfo, _ignore: set):
         """处理电视剧逻辑"""
-        if not self._should_track_media(mediainfo, _ignore):
-            return
-
         next_episode = mediainfo.next_episode_to_air
 
         if not (air_date := next_episode.get("air_date")):
             logger.info(f"{mediainfo.tmdb_id} {mediainfo.title_year} 没有新集或播出日期")
-            return
-
-        if not self.is_date_in_range(air_date, threshold_days=self._after_days):
             return
 
         # 获取季号和集号
@@ -445,13 +525,13 @@ class FollowUp(_PluginBase):
 
     def collection_follow_up(self, collections: dict[str, dict], ignore: set[tuple]):
         from app.chain.tmdb import TmdbChain
-        tmdbapi = TmdbChain()
+        tmdbchain = TmdbChain()
 
         for collection_id, followinfo in collections.items():
             if not followinfo.get("follow_up"):
                 continue
 
-            collection_info = tmdbapi.tmdb_collection(collection_id=int(collection_id))
+            collection_info = tmdbchain.tmdb_collection(collection_id=int(collection_id))
             if not collection_info:
                 continue
 
@@ -492,7 +572,7 @@ class FollowUp(_PluginBase):
             if not next_air_date or not self.is_date_in_range(next_air_date, threshold_days=self._after_days):
                 continue
 
-            msg_title = f"🆕 {followinfo.get("name")} 有新的电影即将上线！"
+            msg_title = f"🆕 {followinfo.get('name')} 有新的电影即将上线！"
             msg_text = (
                 f"🎬 最新电影：{latest_part.title_year}\n"
                 f"{msg}\n"
@@ -505,10 +585,6 @@ class FollowUp(_PluginBase):
     def _get_collection_id(self, mediainfo: MediaInfo, ignore: set) -> tuple[Optional[int], Optional[str]]:
         """获取媒体的合集ID，若非系列电影则更新忽略列表"""
         tmdb_info = mediainfo.tmdb_info
-        if not tmdb_info or not tmdb_info.get("belongs_to_collection"):
-            # 非系列电影，根据释放日期决定是否忽略
-            self._should_track_media(mediainfo, ignore)
-            return None, None
 
         collection_id = tmdb_info["belongs_to_collection"].get("id")
         if not collection_id:
@@ -518,42 +594,25 @@ class FollowUp(_PluginBase):
 
     def _should_track_media(self, mediainfo: MediaInfo, ignore: Optional[set] = None) -> bool:
         """判断是否在跟进时间范围内"""
-        if not self.is_date_in_range(
-            mediainfo.last_air_date or mediainfo.release_date,
-            datetime.now(),
-            365 * self._threshold_years
-        ):
+        air_date = mediainfo.last_air_date or mediainfo.release_date
+        if not air_date or not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
             logger.info(f"{mediainfo.title_year} 已超过设定年限: {self._threshold_years} 年，不再跟进")
-            if ignore:
+            if ignore is not None:
                 ignore.add((mediainfo.type.value, mediainfo.tmdb_id))
-                self.save_ignore_keys(ignore)
-
             return False
 
         return True
 
     def find_earliest_date(self, tmdbid: int):
         results = TmdbApi().movie.release_dates(tmdbid) or []
-        iso_3166_1 = ""
-        _release_date = "9999-12-31T00:00:00.000Z"
-        _type = 4
-        note = ""
+        _release_date, iso_3166_1, note, _type = "9999-12-31T23:59:59.999Z", "", "", 4
         for result in results:
-            release_dates: list[dict] = result.get("release_dates") or []
-            for _d in release_dates:
-                if _d.get("type") <= 3:
-                    # 不考虑 首映 有限上映 影院上映
-                    continue
-                if (_date := _d.get("release_date")) and _date < _release_date:
-                    _release_date = _date
-                    iso_3166_1 = result.get("iso_3166_1")
-                    note = _d.get("note")
-                    _type = _d.get("type")
+            for _d in result.get("release_dates", []):
+                if _d.get("type", 0) > 3 and (_date := _d.get("release_date")) and _date < _release_date:
+                    _release_date, iso_3166_1, note, _type = _date, result.get("iso_3166_1"), _d.get("note"), _d.get("type")
         return _release_date, self.movie_release_info(iso_3166_1, note, _type)
 
-    def _need_follow_up(self, ignore: set[tuple[str, int]], collections: dict[str, dict]) ->set[tuple[str, int]]:
-
-        # 获取订阅
+    def _need_follow_up(self, ignore: set[tuple[str, int]], collections: dict[str, dict]) -> set[tuple[str, int]]:
         subscriptions = {(sub.type, sub.tmdbid) for sub in SubscribeOper().list()}
 
         # 系列包含的条目
@@ -573,16 +632,7 @@ class FollowUp(_PluginBase):
 
         # 媒体服务器
         serveritems = self.get_media_server_items(exclude=ignore)
-        # 订阅历史
-        subscribehis = (
-            {
-                (sub.type, sub.tmdbid)
-                for sub in self.get_subscribe_history(exclude=ignore)
-            }
-            if self._check_sub_history # 是否检查订阅历史
-            else set()
-        )
-        # 去重
+        subscribehis = { (sub.type, sub.tmdbid) for sub in self.get_subscribe_history(exclude=ignore) } if self._check_sub_history else set()
         return serveritems.union(subscribehis)
 
     @eventmanager.register(EventType.MessageAction)
@@ -591,93 +641,49 @@ class FollowUp(_PluginBase):
         处理消息按钮回调
         """
         event_data = event.event_data
-        logger.debug(f"收到消息回调: {event_data}")
-
-        if not event_data:
+        if not event_data or event_data.get("plugin_id") != self.__class__.__name__:
             return
 
-        # 检查是否为本插件的回调
-        plugin_id = event_data.get("plugin_id")
-        if plugin_id != self.__class__.__name__:
+        text_parts = (event_data.get("text") or "").split("|", 1)
+        if len(text_parts) < 2:
             return
+        action, _key = text_parts
 
-        # 获取回调数据
-        text = event_data.get("text") or ""
-        action, _key = text.split("|", 1)
-        channel = event_data.get("channel")
-        source = event_data.get("source")
-        userid = event_data.get("userid")
-        # 获取原始消息ID和聊天ID（用于直接更新原消息）
-        original_message_id = event_data.get("original_message_id")
-        original_chat_id = event_data.get("original_chat_id")
-
-        # 根据回调内容处理不同的交互
-        if action == "add":
-            self._handle_add(channel, source, userid, original_message_id, original_chat_id, _key)
-        elif action == "ignore":
-            self._handle_ignore(channel, source, userid, original_message_id, original_chat_id, _key)
+        handler_map = {"add": self._handle_add, "ignore": self._handle_ignore}
+        if handler := handler_map.get(action):
+            handler(event_data.get("channel"), event_data.get("source"), event_data.get("userid"),
+                    event_data.get("original_message_id"), event_data.get("original_chat_id"), _key)
 
     def _send_menu_message(self, mediainfo: MediaInfo, title: str, text: str):
         """
         发送主菜单
         """
         _key = self.build_key(mediainfo.type.value, mediainfo.tmdb_id)
-        buttons = [
-            [
-                {"text": "📼 追加订阅", "callback_data": f"[PLUGIN]{self.__class__.__name__}|add|{_key}"},
-                {"text": "💤 不再提醒", "callback_data": f"[PLUGIN]{self.__class__.__name__}|ignore|{_key}"}
-            ],
-        ]
-
-        self.post_message(
-            title=title,
-            text=text,
-            mtype=NotificationType.Plugin,
-            buttons=buttons,
-        )
-        # 保存消息
+        buttons = [[
+            {"text": "📼 追加订阅", "callback_data": f"[PLUGIN]{self.__class__.__name__}|add|{_key}"},
+            {"text": "💤 不再提醒", "callback_data": f"[PLUGIN]{self.__class__.__name__}|ignore|{_key}"}
+        ]]
+        self.post_message(title=title, text=text, mtype=NotificationType.Plugin, buttons=buttons)
         self.save_data(_key, self.clean_media_info(mediainfo))
         # 更新忽略列表
         self.update_ignore_keys(_key)
 
     def _handle_add(self, channel, source, userid, original_message_id, original_chat_id, _key: str):
-        """
-        处理媒体管理菜单
-        """
-        msg = ""
-        buttons = None
         data = self.get_data(_key) or {}
         if not data:
-            msg = "信息已过时"
+            msg, buttons = "信息已过时", None
         else:
-            sid, msg = SubscribeChain().add(
-                **data,
-                save_path=self._save_path,
-                sites=self._sites,
-                username=self.plugin_name,
-            )
-            if not sid:
-                buttons = [
-                    [
-                        {"text": "📼 重试", "callback_data": f"[PLUGIN]{self.__class__.__name__}|add|{_key}"},
-                        {"text": "💤 忽略", "callback_data": f"[PLUGIN]{self.__class__.__name__}|ignore|{_key}"}
-                    ],
-                ]
-        if msg:
-            self.post_message(
-                channel=channel,
-                title="添加订阅失败",
-                text="原因: %s" % msg,
-                userid=userid,
-                buttons=buttons,
-                original_message_id=original_message_id,
-                original_chat_id=original_chat_id
-            )
-        elif sid:
-            # 删除已保存数据
-            self.del_data(_key)
-            # 删除原消息
-            self.chain.delete_message(channel, source, original_message_id, original_chat_id)
+            sid, msg = SubscribeChain().add(**data, save_path=self._save_path, sites=self._sites, username=self.plugin_name)
+            if sid:
+                self.del_data(_key)
+                self.chain.delete_message(channel, source, original_message_id, original_chat_id)
+                return
+            buttons = [[
+                {"text": "📼 重试", "callback_data": f"[PLUGIN]{self.__class__.__name__}|add|{_key}"},
+                {"text": "💤 忽略", "callback_data": f"[PLUGIN]{self.__class__.__name__}|ignore|{_key}"}
+            ]]
+        self.post_message(channel=channel, title="添加订阅失败", text=f"原因: {msg}", userid=userid, buttons=buttons,
+                          original_message_id=original_message_id, original_chat_id=original_chat_id)
 
     def _handle_ignore(self, channel, source, userid, original_message_id, original_chat_id, _key):
 
@@ -695,9 +701,7 @@ class FollowUp(_PluginBase):
         )
 
     def get_media_server_items(self, exclude: set[tuple] = set()) -> set[tuple[str, int]]:
-        # 数据库查询不能满足需求, 改为媒体库查询
         # 获取所有媒体服务器
-        # 设置的媒体服务器
         mediaservers = ServiceConfigHelper.get_mediaserver_configs()
         if not mediaservers:
             return
@@ -779,24 +783,13 @@ class FollowUp(_PluginBase):
     def save_collections(self, collections: dict):
         self.save_data("collections", collections)
 
-    def update_collection(self, id: int, collection: dict):
-        collections = self.get_collections()
-        if str(id) not in collections:
-            collections[str(id)] = collection
-        collections[str(id)].update(collection)
-        self.save_collections(collections)
-
     @db_query
-    def get_subscribe_history(self, db: Session = None, tmdbid: int =None, type: MediaType = None, exclude: set[tuple] = set()) -> list[SubscribeHistory]:
-        """获取已完成的订阅"""
+    def get_subscribe_history(self, db: Session = None, tmdbid: int = None, type: MediaType = None, exclude: set[tuple] = set()) -> list[SubscribeHistory]:
         query = db.query(SubscribeHistory)
         conditions = []
-        if tmdbid:
-            conditions.append(SubscribeHistory.tmdbid == tmdbid)
-        if type:
-            conditions.append(SubscribeHistory.type == type.value)
-        if exclude:
-            conditions.append(tuple_(SubscribeHistory.type, SubscribeHistory.tmdbid).notin_(exclude))
+        if tmdbid: conditions.append(SubscribeHistory.tmdbid == tmdbid)
+        if type: conditions.append(SubscribeHistory.type == type.value)
+        if exclude: conditions.append(tuple_(SubscribeHistory.type, SubscribeHistory.tmdbid).notin_(exclude))
         try:
             return query.filter(*conditions).all()
         except Exception as e:
@@ -820,57 +813,11 @@ class FollowUp(_PluginBase):
 
     @staticmethod
     def movie_release_info(iso_code: str, note, type_id) -> str:
-        type_name = {
-            4: "数字发行",
-            5: "实体发行",
-            6: "电视播放"
-        }
-
-        iso_to_country_cn = {
-            "US": "美国",
-            "GB": "英国",
-            "FR": "法国",
-            "DE": "德国",
-            "JP": "日本",
-            "KR": "韩国",
-            "CN": "中国",
-            "HK": "中国香港",
-            "TW": "中国台湾",
-            "CA": "加拿大",
-            "AU": "澳大利亚",
-            "NZ": "新西兰",
-            "IT": "意大利",
-            "ES": "西班牙",
-            "RU": "俄罗斯",
-            "IN": "印度",
-            "BR": "巴西",
-            "MX": "墨西哥",
-            "SG": "新加坡",
-            "TH": "泰国",
-            "VN": "越南",
-            "PH": "菲律宾",
-            "ID": "印度尼西亚",
-            "MY": "马来西亚",
-            "NL": "荷兰",
-            "SE": "瑞典",
-            "NO": "挪威",
-            "DK": "丹麦",
-            "BE": "比利时",
-            "CH": "瑞士",
-            "AT": "奥地利",
-            "PL": "波兰",
-            "TR": "土耳其",
-            "SA": "沙特阿拉伯",
-            "AE": "阿联酋",
-            "IL": "以色列",
-            "ZA": "南非",
-        }
-        msg = (
-            f"🌍 地区：{iso_to_country_cn.get(iso_code.upper(), '未知地区')}\n"
-            f"📼 渠道：{note or '未知'}\n"
-            f"🏷️ 类型：{type_name.get(int(type_id), '未知发行渠道')}"
-        )
-        return msg
+        type_name = {4: "数字发行", 5: "实体发行", 6: "电视播放"}
+        iso_to_country_cn = {"US": "美国", "GB": "英国", "FR": "法国", "DE": "德国", "JP": "日本", "KR": "韩国", "CN": "中国", "HK": "中国香港", "TW": "中国台湾"}
+        return (f"🌍 地区：{iso_to_country_cn.get(iso_code.upper(), '未知地区')}\n"
+                f"📼 渠道：{note or '未知'}\n"
+                f"🏷️ 类型：{type_name.get(int(type_id), '未知发行渠道')}")
 
     @staticmethod
     def is_date_in_range(air_date: Union[datetime, str], reference_date: Optional[Union[datetime, str]] = None, threshold_days: int = 2) -> bool:
