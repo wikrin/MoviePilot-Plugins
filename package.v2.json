@@ -67,13 +67,14 @@
     },
     "EnrichWebhook": {
       "name": "Jellyfin报文补充",
-      "description": "补充webhook事件 item_path 字段",
+      "description": "补充webhook报文, 为 [媒体文件同步删除] 提供必要的数据支持",
       "labels": "工具, Jellyfin",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/path_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.0.2": "增加Season与Series类型的报文处理",
         "1.0.1": "完善逻辑, 增加`tmdb_id`的更正"
       }
     },
