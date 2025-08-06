@@ -1,9 +1,8 @@
 # 基础库
-import threading
+import asyncio
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 第三方库
 import pytz
@@ -37,7 +36,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.1.4"
+    plugin_version = "1.1.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -52,7 +51,7 @@ class FollowUp(_PluginBase):
     # 私有属性
     _scheduler = None
     _last_request_time = 0
-    _request_lock = threading.Lock()
+    _request_lock = asyncio.Lock()
     _min_interval = 0.025
 
     # 配置属性
@@ -380,19 +379,18 @@ class FollowUp(_PluginBase):
                           title="【续作跟进】执行完成",
                           userid=event_data.get("user"))
 
-    def _fetch_tmdb_info(self, mtype: str, tmdbid: int) -> Optional[dict]:
-
-        # 添加速率限制
-        with self._request_lock:
+    async def _fetch_tmdb_info(self, mtype: str, tmdbid: int) -> Optional[dict]:
+        # 频率限制
+        async with self._request_lock:
             now = time.time()
             elapsed = now - self._last_request_time
             if elapsed < self._min_interval:
-                time.sleep(self._min_interval - elapsed)
+                await asyncio.sleep(self._min_interval - elapsed)
             self._last_request_time = time.time()
 
         try:
             if mtype == MediaType.MOVIE.value:
-                if details := self.tmdbapi.movie.details(tmdbid):
+                if details := await self.tmdbapi.movie.async_details(tmdbid):
                     return {
                         "title_year": f"{details.get('title')} ({details.get('release_date')[:4]})",
                         "type": MediaType.MOVIE,
@@ -401,7 +399,7 @@ class FollowUp(_PluginBase):
                         "belongs_to_collection": details.get("belongs_to_collection")
                     }
             elif mtype == MediaType.TV.value:
-                if details := self.tmdbapi.tv.details(tmdbid):
+                if details := await self.tmdbapi.tv.async_details(tmdbid):
                     return {
                         "title_year": f"{details.get('name')} ({details.get('first_air_date')[:4]})",
                         "type": MediaType.TV,
@@ -438,39 +436,45 @@ class FollowUp(_PluginBase):
 
         logger.info(f"开始对 {len(his)} 个条目进行预检...")
 
-        items_for_full_recognition = []
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            future_to_key = {
-                executor.submit(self._fetch_tmdb_info, k[0], k[1]): k
-                for k in his
-            }
-            _collection_ids = set()
-            for future in as_completed(future_to_key):
-                key = future_to_key[future]
-                min_info = future.result()
+        async def _async_fetch_all():
+            tasks = [self._fetch_tmdb_info(mtype, tmdbid) for mtype, tmdbid in his]
+            return await asyncio.gather(*tasks, return_exceptions=True)
 
-                if not min_info:
+        results = asyncio.run(_async_fetch_all())
+
+        items_for_full_recognition = []
+        _collection_ids = set()
+        his_list = list(his)
+
+        for i, min_info in enumerate(results):
+            key = his_list[i]
+
+            if isinstance(min_info, Exception):
+                logger.debug(f"获取TMDB信息失败 ({key}): {min_info}")
+                continue
+
+            if not min_info:
+                continue
+
+            # 电视剧或非系列电影检查年限
+            if not min_info.get("belongs_to_collection"):
+                air_date = min_info.get("last_air_date") or min_info.get("release_date")
+                if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
+                    logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self._threshold_years} 年，不再跟进")
+                    _ignore.add(key)
                     continue
 
-                # 电视剧或非系列电影检查年限
-                if not min_info.get("belongs_to_collection"):
-                    air_date = min_info.get("last_air_date") or min_info.get("release_date")
-                    if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
-                        logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self._threshold_years} 年，不再跟进")
-                        _ignore.add(key)
-                        continue
+            # 检查具体更新
+            if min_info["type"] == MediaType.TV:
+                next_episode = min_info.get("next_episode_to_air")
+                if next_episode and self.is_date_in_range(next_episode.get("air_date"), threshold_days=self._after_days):
+                    items_for_full_recognition.append(key)
 
-                # 检查具体更新
-                if min_info["type"] == MediaType.TV:
-                    next_episode = min_info.get("next_episode_to_air")
-                    if next_episode and self.is_date_in_range(next_episode.get("air_date"), threshold_days=self._after_days):
-                        items_for_full_recognition.append(key)
-
-                elif min_info["type"] == MediaType.MOVIE:
-                    collection = min_info.get("belongs_to_collection")
-                    if collection and collection["id"] not in _collection_ids:
-                        _collection_ids.add(collection["id"])
-                        items_for_full_recognition.append(key)
+            elif min_info["type"] == MediaType.MOVIE:
+                collection = min_info.get("belongs_to_collection")
+                if collection and collection["id"] not in _collection_ids:
+                    _collection_ids.add(collection["id"])
+                    items_for_full_recognition.append(key)
 
         logger.info(f"发现 {len(items_for_full_recognition)} 个有价值的条目。")
 
@@ -535,29 +539,29 @@ class FollowUp(_PluginBase):
             if not collection_info:
                 continue
 
-            collection_parts = followinfo.get("parts") or []
-            latest_release_date = followinfo.get("latest_release_date") or "0000-00-00"
-            if len(collection_info) == len(collection_parts):
-                logger.info(f"{followinfo.get('name') or collection_id} 电影数: {len(collection_info)} 与记录数一致, 等待下次检查")
-                continue
-
             # 查找最新电影
             latest_part = max(collection_info, key=lambda p: p.release_date or "0000-00-00")
-            latest_release = latest_part.release_date
             media_type = latest_part.type
             tmdbid = latest_part.tmdb_id
 
-            if latest_release <= latest_release_date:
-                logger.info(f"{followinfo.get('name') or collection_id} 没有新的系列电影上映")
-                continue
+            latest_release_date = followinfo.get("latest_release_date") or "0000-00-00"
+            latest_air_date = followinfo.get("air_date")
+
+            if latest_part.release_date > latest_release_date:
+                # 更新系列信息
+                followinfo["parts"] = [self.build_key(p.type.value, p.tmdb_id) for p in collection_info]
+                followinfo["latest_release_date"] = latest_part.release_date
 
             # 判断是否仍需追踪该系列
             if not self._should_track_media(latest_part):
                 followinfo["follow_up"] = False
 
-            # 更新系列信息
-            followinfo["parts"] = [self.build_key(p.type.value, p.tmdb_id) for p in collection_info]
-            followinfo["latest_release_date"] = latest_release
+            if latest_air_date and not self.is_date_in_range(
+                latest_air_date, threshold_days=self._after_days
+            ):
+                logger.info(
+                    f"{followinfo.get('name') or collection_id} 没有新的系列电影上映")
+                continue
 
             if not followinfo["follow_up"] or self.build_key(latest_part.type.value, latest_part.tmdb_id) in ignore:
                 continue
@@ -565,11 +569,14 @@ class FollowUp(_PluginBase):
             # 获取数字发行日期
             if media_type == MediaType.MOVIE:
                 next_air_date, msg = self.find_earliest_date(tmdbid)
+                followinfo["air_date"] = next_air_date
             else:
                 next_air_date = None
 
             # 判断是否符合提醒时间
-            if not next_air_date or not self.is_date_in_range(next_air_date, threshold_days=self._after_days):
+            if next_air_date is None or not self.is_date_in_range(next_air_date, threshold_days=self._after_days):
+                logger.info(
+                    f"{latest_part.title} 非院线发行日期: {next_air_date if next_air_date else '暂无'}，不符合提醒条件")
                 continue
 
             msg_title = f"🆕 {followinfo.get('name')} 有新的电影即将上线！"
@@ -610,7 +617,7 @@ class FollowUp(_PluginBase):
             for _d in result.get("release_dates", []):
                 if _d.get("type", 0) > 3 and (_date := _d.get("release_date")) and _date < _release_date:
                     _release_date, iso_3166_1, note, _type = _date, result.get("iso_3166_1"), _d.get("note"), _d.get("type")
-        return _release_date, self.movie_release_info(iso_3166_1, note, _type)
+        return _release_date if _release_date != "9999-12-31T23:59:59.999Z" else None, self.movie_release_info(iso_3166_1, note, _type)
 
     def _need_follow_up(self, ignore: set[tuple[str, int]], collections: dict[str, dict]) -> set[tuple[str, int]]:
         subscriptions = {(sub.type, sub.tmdbid) for sub in SubscribeOper().list()}
