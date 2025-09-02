@@ -1,12 +1,10 @@
 # 基础库
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
 # 第三方库
-import pytz
-from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
@@ -14,7 +12,6 @@ from sqlalchemy.orm import Session
 # 项目库
 from app.chain.mediaserver import MediaServerChain
 from app.chain.subscribe import SubscribeChain
-from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
 from app.db.models.subscribehistory import SubscribeHistory
@@ -36,7 +33,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -49,7 +46,6 @@ class FollowUp(_PluginBase):
     auth_level = 2
 
     # 私有属性
-    _scheduler = None
     _last_request_time = 0
     _request_lock = asyncio.Lock()
     _min_interval = 0.025
@@ -87,6 +83,9 @@ class FollowUp(_PluginBase):
 
         if self._onlyonce:
             self.schedule_once()
+            # 关闭一次性开关
+            self._onlyonce = False
+            self.__update_config()
 
     def load_config(self, config: dict):
         """加载配置"""
@@ -102,19 +101,9 @@ class FollowUp(_PluginBase):
             self.__update_config()
 
     def schedule_once(self):
-        """调度一次性任务"""
-        self._scheduler = BackgroundScheduler(timezone=settings.TZ)
         logger.info("续作跟进，立即运行一次")
-        self._scheduler.add_job(
-            func=self.follow_up,
-            trigger='date',
-            run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-        )
-        self._scheduler.start()
-
-        # 关闭一次性开关
-        self._onlyonce = False
-        self.__update_config()
+        from app.scheduler import Scheduler
+        return asyncio.run_coroutine_threadsafe(self.follow_up(), Scheduler().loop)
 
     def __update_config(self):
         """更新设置"""
@@ -332,13 +321,7 @@ class FollowUp(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        try:
-            if self._scheduler:
-                self._scheduler.remove_all_jobs()
-                self._scheduler.shutdown()
-                self._scheduler = None
-        except Exception as e:
-            logger.error(f"退出插件失败：{str(e)}")
+        pass
 
     def get_api(self):
         pass
@@ -372,12 +355,20 @@ class FollowUp(_PluginBase):
         self.post_message(channel=event_data.get("channel"),
                           title=f"【续作跟进】开始执行 ...",
                           userid=event_data.get("user"))
-        # 运行任务
-        self.follow_up()
+        # 执行任务
+        try:
+            future = self.schedule_once()
+            future.result() # 等待任务完成
+            result_msg = {"title": "【续作跟进】执行完成"}
+        except Exception as e:
+            logger.error(f"执行续作跟进任务出错: {str(e)}")
+            result_msg = {"title": "【续作跟进】执行失败",
+                        "text": f"错误信息: {str(e)}"}
 
+        # 发送消息
         self.post_message(channel=event_data.get("channel"),
-                          title="【续作跟进】执行完成",
-                          userid=event_data.get("user"))
+                        userid=event_data.get("user"),
+                        **result_msg)
 
     async def _fetch_tmdb_info(self, mtype: str, tmdbid: int) -> Optional[dict]:
         # 频率限制
@@ -412,7 +403,7 @@ class FollowUp(_PluginBase):
             logger.debug(f"获取TMDB信息失败 ({mtype} {tmdbid}): {e}")
             return None
 
-    def follow_up(self):
+    async def follow_up(self):
         # 获取忽略列表
         _ignore = self.get_ignore_keys()
         # 获取系列合集
@@ -423,24 +414,20 @@ class FollowUp(_PluginBase):
             logger.info("没有需要跟进的媒体项。")
             return
 
-        self._filter_media(his, _ignore, collections)
+        await self._filter_media(his, _ignore, collections)
 
         if collections:
             self.collection_follow_up(collections, _ignore)
 
         self.save_collections(collections)
-        self.save_ignore_keys(_ignore)
         logger.info("续作跟进执行完成。")
 
-    def _filter_media(self, his: set, _ignore: set, collections: dict):
+    async def _filter_media(self, his: set[tuple[str, int]], _ignore: set[tuple[str, int]], collections: dict[str, dict]):
 
         logger.info(f"开始对 {len(his)} 个条目进行预检...")
 
-        async def _async_fetch_all():
-            tasks = [self._fetch_tmdb_info(mtype, tmdbid) for mtype, tmdbid in his]
-            return await asyncio.gather(*tasks, return_exceptions=True)
-
-        results = asyncio.run(_async_fetch_all())
+        tasks = [self._fetch_tmdb_info(mtype, tmdbid) for mtype, tmdbid in his]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         items_for_full_recognition = []
         _collection_ids = set()
@@ -462,6 +449,7 @@ class FollowUp(_PluginBase):
                 if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
                     logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self._threshold_years} 年，不再跟进")
                     _ignore.add(key)
+                    self.update_ignore_keys(key)
                     continue
 
             # 检查具体更新
@@ -476,7 +464,7 @@ class FollowUp(_PluginBase):
                     _collection_ids.add(collection["id"])
                     items_for_full_recognition.append(key)
 
-        logger.info(f"发现 {len(items_for_full_recognition)} 个有价值的条目。")
+        logger.info(f"发现 {len(items_for_full_recognition)} 个有价值的新条目。")
 
         if not items_for_full_recognition:
             return
@@ -488,13 +476,13 @@ class FollowUp(_PluginBase):
                 continue
 
             if mediainfo.type == MediaType.MOVIE:
-                self._handle_movie(mediainfo, _ignore, collections)
+                self._handle_movie(mediainfo, collections)
             else:
-                self._handle_tv_show(mediainfo, _ignore)
+                self._handle_tv_show(mediainfo)
 
-    def _handle_movie(self, mediainfo: MediaInfo, _ignore: set, collections: dict):
+    def _handle_movie(self, mediainfo: MediaInfo, collections: dict):
         """处理电影逻辑"""
-        collection_id, collection_name = self._get_collection_id(mediainfo, _ignore)
+        collection_id, collection_name = self._get_collection_id(mediainfo)
         if not collection_id:
             return
 
@@ -502,7 +490,7 @@ class FollowUp(_PluginBase):
             collections[str(collection_id)] = {"follow_up": True, "name": collection_name}
             logger.info(f"{mediainfo.tmdb_id} {mediainfo.title_year} 添加至系列合集 {collection_id} {collection_name}")
 
-    def _handle_tv_show(self, mediainfo: MediaInfo, _ignore: set):
+    def _handle_tv_show(self, mediainfo: MediaInfo):
         """处理电视剧逻辑"""
         next_episode = mediainfo.next_episode_to_air
 
@@ -531,6 +519,7 @@ class FollowUp(_PluginBase):
         from app.chain.tmdb import TmdbChain
         tmdbchain = TmdbChain()
 
+        logger.info(f"开始检查 {len(collections)} 个电影合集...")
         for collection_id, followinfo in collections.items():
             if not followinfo.get("follow_up"):
                 continue
@@ -563,7 +552,7 @@ class FollowUp(_PluginBase):
                     f"{followinfo.get('name') or collection_id} 没有新的系列电影上映")
                 continue
 
-            if not followinfo["follow_up"] or self.build_key(latest_part.type.value, latest_part.tmdb_id) in ignore:
+            if not followinfo["follow_up"] or (latest_part.type.value, latest_part.tmdb_id) in ignore:
                 continue
 
             # 获取数字发行日期
@@ -589,8 +578,8 @@ class FollowUp(_PluginBase):
 
             self._send_menu_message(latest_part, msg_title, msg_text)
 
-    def _get_collection_id(self, mediainfo: MediaInfo, ignore: set) -> tuple[Optional[int], Optional[str]]:
-        """获取媒体的合集ID，若非系列电影则更新忽略列表"""
+    def _get_collection_id(self, mediainfo: MediaInfo) -> tuple[Optional[int], Optional[str]]:
+        """获取媒体的合集ID"""
         tmdb_info = mediainfo.tmdb_info
 
         collection_id = tmdb_info["belongs_to_collection"].get("id")
@@ -599,13 +588,11 @@ class FollowUp(_PluginBase):
 
         return collection_id, tmdb_info["belongs_to_collection"].get("name")
 
-    def _should_track_media(self, mediainfo: MediaInfo, ignore: Optional[set] = None) -> bool:
+    def _should_track_media(self, mediainfo: MediaInfo) -> bool:
         """判断是否在跟进时间范围内"""
         air_date = mediainfo.last_air_date or mediainfo.release_date
         if not air_date or not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
             logger.info(f"{mediainfo.title_year} 已超过设定年限: {self._threshold_years} 年，不再跟进")
-            if ignore is not None:
-                ignore.add((mediainfo.type.value, mediainfo.tmdb_id))
             return False
 
         return True
@@ -620,26 +607,35 @@ class FollowUp(_PluginBase):
         return _release_date if _release_date != "9999-12-31T23:59:59.999Z" else None, self.movie_release_info(iso_3166_1, note, _type)
 
     def _need_follow_up(self, ignore: set[tuple[str, int]], collections: dict[str, dict]) -> set[tuple[str, int]]:
+        # 订阅
         subscriptions = {(sub.type, sub.tmdbid) for sub in SubscribeOper().list()}
+        # 已发送跟进通知
+        notified_items = {_key for data in self.get_data() if (_key := self.parse_key(data.key))}
 
-        # 系列包含的条目
-        _collection_items = set()
-        for collection in collections.values():
-            if parts := collection.get("parts"):
-                _collection_items |= {self.parse_key(k) for k in parts}
+        # 移除已订阅
+        already_subscribed_items = (ignore | notified_items) & subscriptions
+        if already_subscribed_items:
+            logger.debug(f"清理 {len(already_subscribed_items)} 个已订阅的忽略项")
+            for item in already_subscribed_items:
+                ignore.discard(item)
+                self.del_data(self.build_key(*item))
+            self.save_ignore_keys(ignore)
 
-        # 忽略的条目
-        _ignore = ignore & subscriptions
-        if _ignore:
-            for k in _ignore:
-                self.del_data(self.build_key(*k))
+        # 排除已订阅 已发送未处理的条目
+        ignore |= subscriptions | notified_items
 
-        # 排除已订阅 已发送未处理 系列合集中的条目
-        ignore |= {*subscriptions, *_collection_items}
+        # 检索排除包含合集中的条目
+        excluded_items = {
+            _key
+            for collection in collections.values()
+            if (parts := collection.get("parts"))
+            for k in parts
+            if (_key := self.parse_key(k))
+        }.union(ignore)
 
         # 媒体服务器
-        serveritems = self.get_media_server_items(exclude=ignore)
-        subscribehis = { (sub.type, sub.tmdbid) for sub in self.get_subscribe_history(exclude=ignore) } if self._check_sub_history else set()
+        serveritems = self.get_media_server_items(exclude=excluded_items)
+        subscribehis = {(sub.type, sub.tmdbid) for sub in self.get_subscribe_history(exclude=excluded_items)} if self._check_sub_history else set()
         return serveritems.union(subscribehis)
 
     @eventmanager.register(EventType.MessageAction)
@@ -672,8 +668,6 @@ class FollowUp(_PluginBase):
         ]]
         self.post_message(title=title, text=text, mtype=NotificationType.Plugin, buttons=buttons)
         self.save_data(_key, self.clean_media_info(mediainfo))
-        # 更新忽略列表
-        self.update_ignore_keys(_key)
 
     def _handle_add(self, channel, source, userid, original_message_id, original_chat_id, _key: str):
         data = self.get_data(_key) or {}
@@ -782,6 +776,8 @@ class FollowUp(_PluginBase):
         """将 key 添加到忽略列表中"""
         if isinstance(key, str):
             key = self.parse_key(key)
+            if not key:
+                return
         self.save_ignore_keys(self.get_ignore_keys().union({key}))
 
     def get_collections(self) -> dict[str, dict]:
@@ -815,7 +811,7 @@ class FollowUp(_PluginBase):
         except ValueError:
             return None
         except Exception as e:
-            print(f"解析key失败: {key_str}, 错误: {str(e)}")
+            logger.warn(f"解析key失败: {key_str}, 错误: {str(e)}")
             return None
 
     @staticmethod
