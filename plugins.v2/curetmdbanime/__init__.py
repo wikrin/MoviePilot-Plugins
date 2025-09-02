@@ -6,6 +6,7 @@ from typing import Any, Optional, Dict, List, Tuple
 
 # 项目库
 from app import schemas
+from app.core.cache import Cache
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
@@ -21,15 +22,17 @@ from .models import EpisodeMap, SeriesEntry, LogicSeason, LogicSeries
 
 
 class SeasonCache:
+    region = "plugin.curetmdbanime"
+
     def __init__(self, use_cont_eps: bool = False):
-        self._cache: Dict[int, LogicSeries] = {}
+        self._cache = Cache(cache_type="lru", maxsize=100)
         self.use_cont_eps = use_cont_eps
 
     def put(self, tmdbid: int, series: LogicSeries):
-        self._cache[tmdbid] = series
+        self._cache.set(str(tmdbid), series, region=self.region)
 
     def get(self, tmdbid: int) -> Optional[LogicSeries]:
-        return self._cache.get(tmdbid)
+        return self._cache.get(str(tmdbid), region=self.region)
 
     def _get_logic_season(self, tmdbid: int, season: int) -> Optional[LogicSeason]:
         """获取指定季的信息，若不存在则返回 None"""
@@ -122,7 +125,7 @@ class SeasonSplitter:
                 return SeriesEntry(**result)
 
         def bangumi_derive() -> Optional[SeriesEntry]:
-            if mediainfo.category != self.ctmdb._category:
+            if not (set(mediainfo.genre_ids) & {16} and set(mediainfo.origin_country) & {"JP"}):
                 return None
 
             if season_count and season_count < 3:
@@ -269,7 +272,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.6"
+    plugin_version = "1.2.7"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -286,14 +289,12 @@ class CureTMDbAnime(_PluginBase):
 
     # 配置属性
     _enabled: bool = False
-    _category: Optional[str] = "日番"
     _source: Optional[str] = ""
     _use_cont_eps: bool = False
     _clear_cache: bool = False
 
     CONFIG_KEYS = (
             "enabled",
-            "category",
             "source",
             "use_cont_eps",
             "clear_cache",
@@ -380,8 +381,6 @@ class CureTMDbAnime(_PluginBase):
         pass
 
     def get_form(self):
-        from app.modules.themoviedb.category import CategoryHelper
-        tv_categories = list(map(lambda cat: {"title": cat, "value": cat}, CategoryHelper().tv_categorys))
         return [
             {
                 'component': 'VForm',
@@ -442,27 +441,12 @@ class CureTMDbAnime(_PluginBase):
                                     }
                                 ],
                             },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 3},
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'category',
-                                            'label': 'Bangumi兜底类别',
-                                            'items': tv_categories,
-                                        },
-                                    }
-                                ]
-                            },
                         ]
                     },
                 ]
             }
         ], {
             "enabled": False,
-            "category" : "日番",
             "source": "https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
             "use_cont_eps": False,
             "clear_cache": False,
@@ -481,16 +465,20 @@ class CureTMDbAnime(_PluginBase):
         return {
             # 识别媒体信息
             "recognize_media": self.on_recognize_media,
+            "async_recognize_media": self.on_recognize_media,
             # tmdb信息
             "tmdb_info": self.on_tmdb_info,
+            "async_tmdb_info": self.on_tmdb_info,
             # 媒体集信息
             "tmdb_episodes": self.on_tmdb_episodes,
+            "async_tmdb_episodes": self.on_tmdb_episodes,
+            # 季信息
+            "tmdb_seasons": self.on_tmdb_seasons,
+            "async_tmdb_seasons": self.on_tmdb_seasons,
             # 刮削元数据
             "metadata_nfo": self.on_metadata_nfo,
             # 刮削图片
             "metadata_img": self.on_metadata_img,
-            # 季信息
-            "tmdb_seasons": self.on_tmdb_seasons,
         }
 
     def is_eligible(self, tmdbid: int = None, mtype: MediaType = None, episode_group: Optional[str] = None) -> bool:
