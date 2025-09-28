@@ -90,7 +90,7 @@ class SeasonCache:
         return logic.unique_entry
 
     def clear(self):
-        self._cache.clear()
+        self._cache.clear(self.region)
 
 
 class SeasonSplitter:
@@ -272,7 +272,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.7"
+    plugin_version = "1.2.8"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -345,6 +345,7 @@ class CureTMDbAnime(_PluginBase):
     def _clear(self):
         try:
             self.splitter.clear()
+            self.cache.clear()
         except Exception as e:
             logger.error(f"缓存清理失败: {e}")
         finally:
@@ -479,6 +480,8 @@ class CureTMDbAnime(_PluginBase):
             "metadata_nfo": self.on_metadata_nfo,
             # 刮削图片
             "metadata_img": self.on_metadata_img,
+            # 文件整理
+            "transfer": self.on_transfer,
         }
 
     def is_eligible(self, tmdbid: int = None, mtype: MediaType = None, episode_group: Optional[str] = None) -> bool:
@@ -501,7 +504,7 @@ class CureTMDbAnime(_PluginBase):
 
     def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo):
         """
-        根据逻辑季信息矫正元数据对象中的季号和集号。
+        根据逻辑季信息调整元数据对象中的季号和集号。
 
         :param meta: 原始元数据对象
         :param mediainfo: 媒体信息对象
@@ -512,7 +515,7 @@ class CureTMDbAnime(_PluginBase):
         if _map := self.cache.org_map(mediainfo.tmdb_id):
 
             # 尝试基于指定的 begin_season 查找匹配
-            self._correct_by_specified(meta, _map)
+            return self._correct_by_specified(meta, _map)
 
     def _correct_by_specified(
         self,
@@ -520,8 +523,8 @@ class CureTMDbAnime(_PluginBase):
         episodes_map: dict[tuple, tuple[int, int]]
     ) -> bool:
         """
-        尝试基于用户提供的 begin_season 来校正元数据。
-        :return: 是否成功进行了校正
+        尝试基于用户提供的 begin_season 调整元数据。
+        :return: 是否成功进行了调整
         """
         if not episodes_map:
             return False
@@ -529,7 +532,7 @@ class CureTMDbAnime(_PluginBase):
         begin_sea = meta.begin_season or 1
         corrected = False
 
-        # 校正 begin_episode 的季号与集号
+        # 调整 begin_episode 的季号与集号
         if meta.begin_episode and (begin_sea, meta.begin_episode) in episodes_map:
             sea, ep = episodes_map[begin_sea, meta.begin_episode]
             meta.begin_season = sea
@@ -724,7 +727,7 @@ class CureTMDbAnime(_PluginBase):
         tmdb_info = self.chain.tmdb_info(tmdbid, MediaType.TV, season)
         if not tmdb_info:
             return None
-        return (schemas.TmdbEpisode(**ep) for ep in tmdb_info.get("episodes", []))
+        return tuple(schemas.TmdbEpisode(**ep) for ep in tmdb_info.get("episodes", []))
 
     def on_metadata_nfo(self, meta: MetaBase, mediainfo: MediaInfo,
                      season: Optional[int] = None, episode: Optional[int] = None) -> Optional[str]:
@@ -826,8 +829,32 @@ class CureTMDbAnime(_PluginBase):
             return None
 
         if logic := self.cache.get(tmdbid):
-            return ( # 返回Tuple 终止run_module执行
+            return tuple( # 返回Tuple 终止run_module执行
                 schemas.TmdbSeason(**sea.to_dict())
                 for sea in logic.seasons
                 if sea.season_number
             )
+
+    def on_transfer(self, meta: MetaBase, mediainfo: MediaInfo, **kwargs):
+        """
+        文件整理
+        :param meta: 预识别的元数据
+        :param mediainfo:  识别的媒体信息
+        :return: None
+        """
+        if not self.is_eligible(mediainfo.tmdb_id, mediainfo.type, mediainfo.episode_group):
+            return None
+
+        if self.correct_meta(meta, mediainfo):
+            try:
+                kwargs["episodes_info"] = self.on_tmdb_episodes(mediainfo.tmdb_id, meta.begin_season)
+                self.flag = True
+                return self.chain.transfer(
+                    meta=meta,
+                    mediainfo=mediainfo,
+                    **kwargs
+                )
+            except Exception as e:
+                logger.error(f"文件整理出错：{e}")
+            finally:
+                del self.flag
