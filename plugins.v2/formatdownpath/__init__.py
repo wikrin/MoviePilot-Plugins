@@ -1,9 +1,9 @@
 # 基础库
+import re
+import threading
 from abc import ABCMeta, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-import re
-import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
@@ -20,7 +20,7 @@ from app.db import db_update
 from app.db.models.plugindata import PluginData
 from app.helper.downloader import DownloaderHelper
 from app.log import logger
-from app.modules.filemanager import FileManagerModule
+from app.modules.filemanager.transhandler import TransHandler
 from app.modules.qbittorrent import Qbittorrent
 from app.modules.transmission import Transmission
 from app.plugins import _PluginBase
@@ -139,7 +139,7 @@ class QbittorrentDownloader(Downloader):
             for torrent_info in torrents_info:
                 torrents.append(TorrentInfo(
                     name = torrent_info.get('name'),
-                    save_path = torrent_info.get('save_path'),
+                    save_path = Path(torrent_info.get('save_path')).as_posix(),
                     total_size = torrent_info.get('total_size'),
                     hash=torrent_info.get('hash'),
                     auto_tmm=torrent_info.get('auto_tmm'),
@@ -180,24 +180,40 @@ class TransmissionDownloader(Downloader):
 
     def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
         torrents = []
-        torrents_info = [self.trc.get_torrent(torrent_id=torrent_hash)] if torrent_hash else self.trc.get_torrents()
-        if torrents_info:
-            for torrent_info in torrents_info:
-                torrents.append(TorrentInfo(
-                    name = torrent_info.name,
-                    save_path = torrent_info.download_dir,
-                    tags=torrent_info.labels if torrent_info.labels else [''],
-                    total_size = torrent_info.total_size,
-                    hash=torrent_info.hashString,
-                    # 种子文件列表
-                    files= [
-                        TorrentFile(
-                            name=file.get('name'),
-                            size=file.get('length'))
-                        for file in torrent_info.fields.get('files')
-                        if '_____padding_file_' not in file.get('name') # 排除padding文件
-                    ]
-                ))
+        try:
+            if torrent_hash:
+                # 单个种子查询需要异常处理
+                try:
+                    torrent_info = self.trc.get_torrent(torrent_id=torrent_hash)
+                    torrents_info = [torrent_info] if torrent_info else []
+                except KeyError:
+                    # 种子未找到，返回空列表
+                    logger.debug(f"Transmission 中未找到种子: {torrent_hash}")
+                    torrents_info = []
+            else:
+                # 获取所有种子
+                torrents_info = self.trc.get_torrents()
+
+            if torrents_info:
+                for torrent_info in torrents_info:
+                    torrents.append(TorrentInfo(
+                        name = torrent_info.name,
+                        save_path = Path(torrent_info.download_dir).as_posix(),
+                        tags=torrent_info.labels if torrent_info.labels else [''],
+                        total_size = torrent_info.total_size,
+                        hash=torrent_info.hashString,
+                        # 种子文件列表
+                        files= [
+                            TorrentFile(
+                                name=file.get('name'),
+                                size=file.get('length'))
+                            for file in torrent_info.fields.get('files')
+                            if '_____padding_file_' not in file.get('name') # 排除padding文件
+                        ]
+                    ))
+        except Exception as e:
+            logger.error(f"获取 Transmission 种子信息时出错: {str(e)}")
+
         return torrents
 
 
@@ -209,7 +225,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.8"
+    plugin_version = "1.1.9"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -459,7 +475,7 @@ class FormatDownPath(_PluginBase):
             logger.info(f"成功 {_processed_num} 个, 合计 {len(processed)} 个种子已保存至历史")
 
     def main(self, downloader: str = None, downloadhis: DownloadHistory = None,
-             torrent_hash: str =None, torrent_info: TorrentInfo = None, 
+             torrent_hash: str =None, torrent_info: TorrentInfo = None,
              meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
         """
         处理单个种子
@@ -569,7 +585,7 @@ class FormatDownPath(_PluginBase):
             new_path = save_path / new_file_path
             if new_path != save_path:
                 try:
-                    new_path = str(new_path)
+                    new_path = new_path.as_posix()
                     self.downloader.set_torrent_save_path(torrent_hash=_torrent_hash, location=new_path)
                     # 更新路径信息
                     downloadhis, downfiles = self.update_path(downloadhis=downloadhis, downfiles=downfiles, old_path=torrent_info.save_path, new_path=new_path)
@@ -603,7 +619,7 @@ class FormatDownPath(_PluginBase):
                         mediainfo=media_info,
                         file_ext=file_suffix)
                     new_file_path = str(_file_new_path)
-                    old_path = str(file_path)
+                    old_path = file_path.as_posix()
                     # 跳过已重命名的文件
                     if new_file_path in old_path:
                         continue
@@ -648,6 +664,14 @@ class FormatDownPath(_PluginBase):
                         k: v if k != 'files' else [TorrentFile(**f) for f in v]
                         for k, v in result.items()
                     })
+                # 查询转钟记录
+                transfer_history = self.get_data(key=f"{downloader}-{torrent_hash}",
+                                                plugin_id="TorrentTransfer")
+                if transfer_history and isinstance(transfer_history, dict):
+                    logger.info(f"查询到转种记录 {transfer_history}")
+                    downloader = transfer_history['to_download']
+                    torrent_hash = transfer_history['to_download_id']
+
                 # 设置下载器
                 self.set_downloader(downloader)
             else:
@@ -663,7 +687,7 @@ class FormatDownPath(_PluginBase):
             else:
                 self.delete_data(key="processed", torrent_hash=torrent_hash)
                 logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}, 记录已删除")
-                return False
+                return True
             if new_info == his_info:
                 self.delete_data(key="processed", torrent_hash=torrent_hash)
                 logger.warn(f"与备份一致，跳过恢复, 记录已删除")
@@ -722,10 +746,9 @@ class FormatDownPath(_PluginBase):
         """
         获取种子数据
         """
-        if data := self.get_data(key=torrent_hash):
+        data: dict = self.get_data(key=torrent_hash)
+        if data:
             return {"name": data.get('name'), "files_count": len(data.get('files')), "save_path": data.get('save_path')}
-        else:
-            return None
 
     def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
         """
@@ -807,32 +830,22 @@ class FormatDownPath(_PluginBase):
         :param mediainfo: 识别的媒体信息
         :param file_ext: 文件扩展名
         """
-        try:
-            from app.modules.filemanager.transhandler import TransHandler
-
-            return TransHandler().get_rename_path(
-                template_string=template_string,
-                rename_dict=TransHandler().get_naming_dict(
-                    meta=meta, mediainfo=mediainfo, file_ext=file_ext
-                ),
-            )
-        except ImportError as e:
-            return FileManagerModule.get_rename_path(
-                template_string,
-                FileManagerModule._FileManagerModule__get_naming_dict(
-                    meta=meta, mediainfo=mediainfo, file_ext=file_ext
-                ),
-            )
+        return TransHandler().get_rename_path(
+            template_string=template_string,
+            rename_dict=TransHandler().get_naming_dict(
+                meta=meta, mediainfo=mediainfo, file_ext=file_ext
+            ),
+        )
 
     @staticmethod
     def update_path(downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
 
-        def safe_replace(d: dict, old: str, new: str):
+        def safe_replace(d: dict[str, str], old: str, new: str):
             """
             替换路径
             """
             for k, v in d.items():
-                if isinstance(v, str):
+                if old in v:
                     p = d[k]
                     d[k] = v.replace(old, new)
                     logger.debug(f"替换: {p} ==> {d[k]}")
