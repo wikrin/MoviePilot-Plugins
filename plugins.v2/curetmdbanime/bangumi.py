@@ -129,7 +129,7 @@ class BangumiAPIClient:
                 name = detail.get("name")
                 name_cn = detail.get("name_cn")
                 num = self.extract_season_number(name, name_cn)
-                eps = detail.get("eps", 0)
+                eps = detail.get("eps", 0) or detail.get("total_episodes", 12)
                 if num not in bgm_seasons:
                     bgm_seasons[num] = SeasonEntry(
                         episode_count=bgm_seasons.get(num, 0) + eps, name=name_cn,

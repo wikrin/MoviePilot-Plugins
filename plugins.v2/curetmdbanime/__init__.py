@@ -75,13 +75,12 @@ class SeasonCache:
         logic = self._get_logic_season(tmdbid, season)
         return logic.org_map(self.use_cont_eps) if logic else None
 
-    def org_map(self, tmdbid: int) -> Optional[Dict[tuple, tuple[int, int]]]:
+    def org_map(self, tmdbid: int) -> Dict[tuple, tuple[int, int]]:
         """
         获取原始季映射关系
         :param tmdbid: 媒体 TMDB ID
         """
-        if logic := self.get(tmdbid):
-            return logic.org_map(self.use_cont_eps)
+        return logic.org_map(self.use_cont_eps) if (logic := self.get(tmdbid)) else {}
 
     def unique_seasons(self, tmdbid: int, season: int) -> list[EpisodeMap]:
         logic = self._get_logic_season(tmdbid, season)
@@ -272,7 +271,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.2.8"
+    plugin_version = "1.3.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -502,7 +501,7 @@ class CureTMDbAnime(_PluginBase):
 
         return True
 
-    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo):
+    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo) -> bool:
         """
         根据逻辑季信息调整元数据对象中的季号和集号。
 
@@ -510,45 +509,54 @@ class CureTMDbAnime(_PluginBase):
         :param mediainfo: 媒体信息对象
         """
         if not meta or not mediainfo:
-            return
-
-        if _map := self.cache.org_map(mediainfo.tmdb_id):
-
-            # 尝试基于指定的 begin_season 查找匹配
-            return self._correct_by_specified(meta, _map)
-
-    def _correct_by_specified(
-        self,
-        meta: MetaBase,
-        episodes_map: dict[tuple, tuple[int, int]]
-    ) -> bool:
-        """
-        尝试基于用户提供的 begin_season 调整元数据。
-        :return: 是否成功进行了调整
-        """
-        if not episodes_map:
             return False
 
-        begin_sea = meta.begin_season or 1
+        episodes_map: dict[tuple, tuple[int, int]] = self.cache.org_map(mediainfo.tmdb_id)
         corrected = False
 
-        # 调整 begin_episode 的季号与集号
-        if meta.begin_episode and (begin_sea, meta.begin_episode) in episodes_map:
-            sea, ep = episodes_map[begin_sea, meta.begin_episode]
-            meta.begin_season = sea
-            meta.begin_episode = ep
-            corrected = True
+        def adjust_episode(is_begin: bool) -> bool:
+            """调整单个集数信息"""
+            episode_num = meta.begin_episode if is_begin else meta.end_episode
+            if not episode_num:
+                return False
 
-        # 处理 end_episode（若存在）
-        end_sea = meta.end_season or begin_sea
-        if meta.end_episode and (end_sea, meta.end_episode) in episodes_map:
-            sea, ep = episodes_map[end_sea, meta.end_episode]
-            meta.end_season = sea if meta.end_season else None
-            meta.end_episode = ep
-            corrected = True
+            season_num = (meta.begin_season if is_begin else meta.end_season) or 1
+
+            # TMDB 使用连续集号时
+            if (season_num, episode_num) in episodes_map:
+                logical_season, logical_episode = episodes_map[season_num, episode_num]
+                if season_num == logical_season and episode_num == logical_episode:
+                    return False
+                if is_begin:
+                    meta.begin_season = logical_season
+                    meta.begin_episode = logical_episode
+                else:
+                    meta.end_season = logical_season if meta.end_season else None
+                    meta.end_episode = logical_episode
+                return True
+
+            # 发布组使用连续集号, TMDB分季时
+            elif len(mediainfo.seasons.get(season_num, [])) < episode_num <= mediainfo.number_of_episodes:
+                offset = 0
+                for season_key, episodes_list in mediainfo.seasons.items():
+                    if (found_episode := episode_num - offset) in episodes_list:
+                        if is_begin:
+                            meta.begin_season = season_key
+                            meta.begin_episode = found_episode
+                        else:
+                            meta.end_season = season_key if meta.end_season else None
+                            meta.end_episode = found_episode
+                        return True
+                    offset += len(episodes_list)
+
+            return False
+
+        # 调整 begin_episode 和 end_episode
+        orig_season_episode = meta.season_episode
+        corrected = adjust_episode(True) | adjust_episode(False)
 
         if corrected:
-            logger.info(f"元数据季集已调整：{meta.season_episode}")
+            logger.info(f"元数据季集已调整：{orig_season_episode} ==> {meta.season_episode}")
 
         return corrected
 
@@ -615,8 +623,8 @@ class CureTMDbAnime(_PluginBase):
                 media_info.title = logic.name
 
             media_info.season_info = seasons_info
-            self.correct_meta(meta, media_info)
 
+        self.correct_meta(meta, media_info)
         return media_info
 
     def on_tmdb_info(self, tmdbid: int, mtype: MediaType, season: Optional[int] = None) -> Optional[dict]:
