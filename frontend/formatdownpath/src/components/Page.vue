@@ -142,21 +142,20 @@ const loadData = async () => {
 const recoverFromHistory = async (hash: string, downloader: string) => {
   try {
     loading.value = true
-    const isSuccess: boolean = await props.api.post(
+    const [success, message]: [Boolean, string] = await props.api.post(
       `plugin/FormatDownPath/recover_from_history`, {downloader: downloader, torrent_hash: hash})
-    if (isSuccess) {
-      showNotification('恢复成功')
+    if (success) {
+      showNotification(message)
       // 本地状态更新
       torrentList.value = torrentList.value.filter(t => t.hash !== hash)
       delete processedData.value[hash]
       allHashes.value = allHashes.value.filter(h => h !== hash)
-
+  } else {
+      showNotification(message, 'error')
+    }
     // 重新计算分页
     if (currentPage.value > 1) {
       await loadData()
-    }
-  } else {
-      showNotification('恢复失败', 'error')
     }
 
   } catch (err) {

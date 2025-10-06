@@ -1,5 +1,6 @@
 # 基础库
 import re
+import shutil
 import threading
 from abc import ABCMeta, abstractmethod
 from dataclasses import asdict, dataclass, field
@@ -8,9 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # 第三方库
 from apscheduler.triggers.cron import CronTrigger
+from lxml import etree
 from sqlalchemy.orm import Session
 
 # 项目库
+from app.core.config import settings
 from app.core.context import MediaInfo, TorrentInfo, Context
 from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
@@ -19,6 +22,7 @@ from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, Do
 from app.db import db_update
 from app.db.models.plugindata import PluginData
 from app.helper.downloader import DownloaderHelper
+from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules.filemanager.transhandler import TransHandler
 from app.modules.qbittorrent import Qbittorrent
@@ -26,6 +30,9 @@ from app.modules.transmission import Transmission
 from app.plugins import _PluginBase
 from app.schemas.types import EventType, MediaType
 from app.schemas.types import SystemConfigKey
+from app.utils.http import RequestUtils
+from app.utils.string import StringUtils
+from app.utils.system import SystemUtils
 
 
 @dataclass
@@ -225,7 +232,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.1.9"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -238,7 +245,6 @@ class FormatDownPath(_PluginBase):
     auth_level = 1
 
     # 私有属性
-    _scheduler = None
     _lock = threading.Lock()
 
     # 配置属性
@@ -254,6 +260,10 @@ class FormatDownPath(_PluginBase):
     _format_torrent_name: str = ""
     _format_movie_path: str = ""
     _format_tv_path: str = ""
+    _site_subtitle_xpath = [
+        '//td[@class="rowhead"][text()="字幕"]/following-sibling::td//a/@href',
+        '//div[contains(@class, "torrent-subtitles")]//a[contains(@href, "download")]/@href',
+    ]
 
     def init_plugin(self, config: dict = None):
 
@@ -312,13 +322,7 @@ class FormatDownPath(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        try:
-            if self._scheduler:
-                self._scheduler.remove_all_jobs()
-                self._scheduler.shutdown()
-                self._scheduler = None
-        except Exception as e:
-            logger.error(f"退出插件失败：{str(e)}")
+        pass
 
     def get_api(self):
         return[{
@@ -355,26 +359,36 @@ class FormatDownPath(_PluginBase):
     def get_state(self):
         return self._event_enabled or self._cron_enabled
 
+    def on_download_added(self, **kwargs):
+        return self._event_enabled if self._event_enabled else None
+
+    def get_module(self) -> Dict[str, Any]:
+        """
+        获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
+        """
+        return {
+            "download_added": self.on_download_added,
+        }
+
     @eventmanager.register(EventType.DownloadAdded)
     def event_process_main(self, event: Event):
         """
         处理事件
         """
         if not self._event_enabled \
-            and not event:
+            or not event:
             return
         event_data = event.event_data or {}
         torrent_hash = event_data.get("hash")
         downloader = event_data.get("downloader")
         # 获取待处理数据
-        if self._event_enabled:
-            context: Context = event_data.get("context")
-            if self.main(downloader=downloader, torrent_hash=torrent_hash, meta=context.meta_info, media_info=context.media_info):
-                # 保存已处理数据
-                self.update_data(key="processed", value={torrent_hash: downloader})
-            else:
-                # 保存未完成数据
-                self.update_data(key="pending", value={torrent_hash: downloader})
+        context: Context = event_data.get("context")
+        if self.main(downloader=downloader, torrent_hash=torrent_hash, meta=context.meta_info, media_info=context.media_info):
+            # 保存已处理数据
+            self.update_data(key="processed", value={torrent_hash: downloader})
+
+        # 下载字幕
+        self.download_subtitle(context=context, torrent_hash=torrent_hash)
 
     def cron_process_main(self):
         """
@@ -649,6 +663,108 @@ class FormatDownPath(_PluginBase):
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success
 
+    def download_subtitle(self, context: Context, torrent_hash: str):
+        """
+        添加下载任务成功后，从站点下载字幕，保存到下载目录
+        :param context:  上下文，包括识别信息、媒体信息、种子信息
+        :param torrent_hash: 种子hash
+        """
+        if not settings.DOWNLOAD_SUBTITLE:
+            return
+
+        download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
+        if not download_history:
+            return
+
+        download_dir = Path(download_history.path)
+        # 没有详情页不处理
+        torrent = context.torrent_info
+        if not torrent.page_url:
+            return
+        # 字幕下载目录
+        logger.info("开始从站点下载字幕：%s" % torrent.page_url)
+        # 读取网站代码
+        request = RequestUtils(cookies=torrent.site_cookie, ua=torrent.site_ua)
+        res = request.get_res(torrent.page_url)
+        if res and res.status_code == 200:
+            if not res.text:
+                logger.warn(f"读取页面代码失败：{torrent.page_url}")
+                return
+            html: etree._Element = etree.HTML(res.text)
+            try:
+                sublink_list = []
+                for xpath in self._site_subtitle_xpath:
+                    sublinks: list[str] = html.xpath(xpath)
+                    if sublinks:
+                        for sublink in sublinks:
+                            if not sublink:
+                                continue
+                            if not sublink.startswith("http"):
+                                base_url = StringUtils.get_base_url(torrent.page_url)
+                                if sublink.startswith("/"):
+                                    sublink = "%s%s" % (base_url, sublink)
+                                else:
+                                    sublink = "%s/%s" % (base_url, sublink)
+                            sublink_list.append(sublink)
+            finally:
+                if html is not None:
+                    del html
+            # 下载所有字幕文件
+            for sublink in sublink_list:
+                logger.info(f"找到字幕下载链接：{sublink}，开始下载...")
+                # 下载
+                ret = request.get_res(sublink)
+                if ret and ret.status_code == 200:
+                    # 保存ZIP
+                    file_name = TorrentHelper.get_url_filename(ret, sublink)
+                    if not file_name:
+                        logger.warn(f"链接不是字幕文件：{sublink}")
+                        continue
+                    if file_name.lower().endswith(".zip"):
+                        # ZIP包
+                        zip_file = settings.TEMP_PATH / file_name
+                        # 保存
+                        zip_file.write_bytes(ret.content)
+                        # 解压路径
+                        zip_path = zip_file.with_name(zip_file.stem)
+                        # 解压文件
+                        shutil.unpack_archive(zip_file, zip_path, format='zip')
+                        # 目录仍然不存在，则创建目录
+                        if not download_dir.exists():
+                            download_dir.mkdir(parents=True, exist_ok=True)
+                        # 遍历转移文件
+                        for sub_file in SystemUtils.list_files(zip_path, settings.RMT_SUBEXT):
+                            target_sub_file = download_dir / sub_file.name
+                            if target_sub_file.exists():
+                                logger.info(f"字幕文件已存在：{target_sub_file}")
+                                continue
+                            logger.info(f"转移字幕 {sub_file} 到 {target_sub_file} ...")
+                            SystemUtils.copy(sub_file, target_sub_file)
+                        # 删除临时文件
+                        try:
+                            shutil.rmtree(zip_path)
+                            zip_file.unlink()
+                        except Exception as err:
+                            logger.error(f"删除临时文件失败：{str(err)}")
+                    else:
+                        sub_file = settings.TEMP_PATH / file_name
+                        # 保存
+                        sub_file.write_bytes(ret.content)
+                        target_sub_file = download_dir / sub_file.name
+                        logger.info(f"转移字幕 {sub_file} 到 {target_sub_file}")
+                        SystemUtils.copy(sub_file, target_sub_file)
+                else:
+                    logger.error(f"下载字幕文件失败：{sublink}")
+                    continue
+            if sublink_list:
+                logger.info(f"{torrent.page_url} 页面字幕下载完成")
+            else:
+                logger.warn(f"{torrent.page_url} 页面未找到字幕下载链接")
+        elif res is not None:
+            logger.warn(f"连接 {torrent.page_url} 失败，状态码：{res.status_code}")
+        else:
+            logger.warn(f"无法打开链接：{torrent.page_url}")
+
     def recover_from_history(self, request: Dict[str, str]):
         """
         从处理历史中恢复
@@ -675,23 +791,27 @@ class FormatDownPath(_PluginBase):
                 # 设置下载器
                 self.set_downloader(downloader)
             else:
-                logger.warn(f"未找到种子 {torrent_hash} 的处理历史")
-                return False
+                msg = f"未找到种子 {torrent_hash} 的处理历史"
+                logger.warn(msg)
+                return False, msg
             if self.downloader is None:
-                logger.warn(f"下载器: {downloader} 不存在或未启用")
-                return False
+                msg = f"下载器: {downloader} 不存在或未启用"
+                logger.warn(msg)
+                return False, msg
             if new_info := self.downloader.torrents_info(torrent_hash=his_info.hash):
                 new_info = new_info[0]
                 # 查询数据库
                 downloadhis, downfiles = self.fetch_data(torrent_hash=torrent_hash)
             else:
                 self.delete_data(key="processed", torrent_hash=torrent_hash)
-                logger.warn(f"下载器 {downloader} 不存在该种子: {torrent_hash}, 记录已删除")
-                return True
+                msg = f"下载器 {downloader} 不存在该种子: {torrent_hash}, 记录已删除"
+                logger.warn(msg)
+                return True, msg
             if new_info == his_info:
                 self.delete_data(key="processed", torrent_hash=torrent_hash)
-                logger.warn(f"与备份一致，跳过恢复, 记录已删除")
-                return True
+                msg= "与备份一致，跳过恢复, 记录已删除"
+                logger.warn(msg)
+                return True, msg
             success = True
             need_update = False
             # 恢复种子文件
@@ -705,7 +825,7 @@ class FormatDownPath(_PluginBase):
                         need_update = True
                         logger.info(f"种子文件恢复成功：{n.name} ==> {o.name}")
                     except Exception as e:
-                        logger.error(f"种子文件：{n.name} 恢复失败: {str(e)}")
+                        msg = f"种子文件：{n.name} 恢复失败: {str(e)}"
                         success = False
             # 恢复种子保存路径
             if success and new_info.save_path != his_info.save_path:
@@ -715,7 +835,7 @@ class FormatDownPath(_PluginBase):
                     need_update = True
                     logger.info(f"保存路径恢复成功：{new_info.save_path} ==> {his_info.save_path}")
                 except Exception as e:
-                    logger.error(f"保存路径恢复失败: {str(e)}")
+                    msg = f"保存路径恢复失败: {str(e)}"
                     success = False
             # 恢复种子名称
             if success and new_info.name != his_info.name:
@@ -723,7 +843,7 @@ class FormatDownPath(_PluginBase):
                     self.downloader.torrents_rename(torrent_hash=new_info.hash, old_path=new_info.name, new_torrent_name=his_info.name)
                     logger.info(f"恢复种子名称成功：{new_info.name} ==> {his_info.name}")
                 except Exception as e:
-                    logger.error(f"种子名称：{new_info.name} 恢复失败: {str(e)}")
+                    msg = f"种子名称：{new_info.name} 恢复失败: {str(e)}"
                     success = False
 
             if need_update:
@@ -731,10 +851,11 @@ class FormatDownPath(_PluginBase):
                 if success:
                     # 删除处理记录
                     self.delete_data(key="processed",torrent_hash=torrent_hash)
-                    logger.info(f"恢复完成, 记录已删除")
-                    return True
+                    msg = f"恢复完成, 记录已删除"
+                    logger.info(msg)
+                    return True, msg
                 else:
-                    return False
+                    return False, msg
 
     def get_processed_data(self) -> dict[str, str]:
         """
