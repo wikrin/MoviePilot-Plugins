@@ -5,7 +5,7 @@ import threading
 from abc import ABCMeta, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # 第三方库
 from apscheduler.triggers.cron import CronTrigger
@@ -232,7 +232,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.2.0"
+    plugin_version = "1.3.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -368,6 +368,7 @@ class FormatDownPath(_PluginBase):
         """
         return {
             "download_added": self.on_download_added,
+            "remove_torrents": self.on_remove_torrents,
         }
 
     @eventmanager.register(EventType.DownloadAdded)
@@ -389,6 +390,20 @@ class FormatDownPath(_PluginBase):
 
         # 下载字幕
         self.download_subtitle(context=context, torrent_hash=torrent_hash)
+
+    def on_remove_torrents(self, hashs: Union[str, list], delete_file: bool = True,
+                        downloader: Optional[str] = None):
+        """
+        删除下载器种子
+        :param hashs:  种子Hash
+        :param delete_file: 是否删除文件
+        :param downloader:  下载器
+        :return: None
+        """
+        if isinstance(hashs, str):
+            hashs = [hashs]
+        for hash in hashs:
+            self.delete_data(key="processed", torrent_hash=hash)
 
     def cron_process_main(self):
         """
