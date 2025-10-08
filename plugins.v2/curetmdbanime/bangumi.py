@@ -1,8 +1,8 @@
 import re
 import cn2an
-import requests
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Tuple
+from requests import Response, Session
+from typing import Callable, Optional, Any, Tuple
 
 from app.core.cache import cached
 from app.log import logger
@@ -25,18 +25,18 @@ class BangumiAPIClient:
     }
     _base_url = "https://api.bgm.tv/"
 
-    def __init__(self):
-        self._session = requests.Session()
-        self._req = RequestUtils(session=self._session)
+    def __init__(self, ua: str = None):
+        self._session = Session()
+        self._req = RequestUtils(ua=ua, session=self._session)
 
     @cached(maxsize=1024, ttl=60 * 60 * 6)
     def __invoke(self, method, url, key: Optional[str] = None, data: Any = None, json: dict = None, **kwargs):
         req_url = self._base_url + url
-        req_method = {
+        req_method: dict[str, Callable[..., Optional[Response]]] = {
             "get": self._req.get_res,
             "post": self._req.post_res,
             "put": self._req.put_res,
-            "request": self._req.request
+            "request": self._req.request,
         }
         params = {}
         if kwargs:
@@ -48,7 +48,7 @@ class BangumiAPIClient:
             result = resp.json()
             return result.get(key) if key else result
         except Exception as e:
-            print(e)
+            logger.error(str(e))
             return None
 
     def search(self, title: str, air_date: str):
@@ -77,30 +77,30 @@ class BangumiAPIClient:
         """
         获取番剧详情
         """
-        return self.__invoke("get", self._urls["detail"] % bid, _ts=datetime.strftime(datetime.now(), '%Y%m%d'))
+        return self.__invoke("get", self._urls["detail"] % bid)
 
     def subjects(self, bid: int):
         """
         获取关联条目信息
         """
-        return self.__invoke("get", self._urls["subjects"] % bid, _ts=datetime.strftime(datetime.now(), '%Y%m%d'))
+        return self.__invoke("get", self._urls["subjects"] % bid)
 
     def episodes(self, bid: int, type: int = 0, limit: int = 1, offset: int = 0):
         """
         获取所有集信息
         """
         kwargs = {k: v for k, v in locals().items() if k not in ("self", "bid")}
-        return self.__invoke("get", self._urls["episodes"] % bid, _ts=datetime.strftime(datetime.now(), '%Y%m%d'), **kwargs)
+        return self.__invoke("get", self._urls["episodes"] % bid, **kwargs)
 
-    def get_all_sequels(self, bid: int) -> List[int]:
+    def get_all_sequels(self, bid: int) -> list[int]:
         """
         递归获取指定 Bangumi 条目及其所有续集条目
         :param bid: 初始 Bangumi ID
-        :return: 包含所有续集关系的嵌套结构
+        :return: 包含所有续集的ids列表
         """
         result = []
 
-        def _recursive_fetch(current_bid: int) -> Dict[str, Any]:
+        def _recursive_fetch(current_bid: int) -> dict[str, Any]:
             result.append(current_bid)
             # 获取关联条目并查找续集
             related_subjects = self.subjects(current_bid)
@@ -129,7 +129,7 @@ class BangumiAPIClient:
                 name = detail.get("name")
                 name_cn = detail.get("name_cn")
                 num = self.extract_season_number(name, name_cn)
-                eps = detail.get("eps", 0) or detail.get("total_episodes", 12)
+                eps = detail.get("eps") or detail.get("total_episodes", 12)
                 if num not in bgm_seasons:
                     bgm_seasons[num] = SeasonEntry(
                         episode_count=bgm_seasons.get(num, 0) + eps, name=name_cn,
@@ -145,7 +145,7 @@ class BangumiAPIClient:
                     else:
                         bgm_seasons[num].episode_count += eps
 
-            return SeriesEntry(seasons=list(bgm_seasons.values())) if len(bgm_seasons) >= 2 else None
+            return SeriesEntry(seasons=list(bgm_seasons.values()))
 
         except Exception as e:
             logger.error(f"构建季信息失败: {str(e)}")
@@ -186,40 +186,31 @@ class BangumiAPIClient:
         def _parse(text: str):
             if not text:
                 return None
-            # 第x季、第x期、x季全
-            match = re.search(r"[第\s]*([一二三四五六七八九十ⅠⅡⅢⅣ0-9]+)\s*(?:季|期)", text, re.IGNORECASE)
-            if match:
-                season_str = match.group(1).strip()
-                try:
-                    return int(cn2an.cn2an(season_str, mode='smart'))
-                except Exception:
-                    pass
 
-            # Season x
-            match = re.search(r"Season\s*([0-9ⅠⅡⅢⅣ]+)", text, re.IGNORECASE)
-            if match:
-                season_str = match.group(1).strip()
-                try:
-                    return int(cn2an.cn2an(season_str, mode='smart'))
-                except Exception:
-                    pass
+            # 定义多个匹配规则
+            patterns = [
+                # 中文季/期
+                r"[第\s]*([一二三四五六七八九十ⅠⅡⅢⅣ0-9]+)\s*(?:季|期)",
+                # 英文 Season x
+                r"Season\s*([0-9ⅠⅡⅢⅣ]+)",
+                # 2nd season 等格式
+                r"([0-9]{1,2})(?:st|nd|rd|th)\s+season",
+            ]
 
-            # 2nd season
-            match = re.search(r"([0-9]{1,2})(?:st|nd|rd|th)\s+season", text, re.IGNORECASE)
-            if match:
-                season_str = match.group(1).strip()
-                try:
-                    return int(season_str)
-                except Exception:
-                    pass
-
-            return None
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE)
+                if match:
+                    season_str = match.group(1).strip()
+                    try:
+                        return int(cn2an.cn2an(season_str, mode='smart'))
+                    except Exception:
+                        return None
 
         cn_result = _parse(name_cn) if name_cn else None
         en_result = _parse(name) if name else None
 
         if cn_result and en_result:
-            # 两者都匹配到，若一致则使用，否则优先用中文
+            # 两者都匹配到，优先用中文
             return cn_result
         elif cn_result:
             return cn_result
@@ -238,4 +229,3 @@ class BangumiAPIClient:
     def close(self):
         if self._session:
             self._session.close()
-

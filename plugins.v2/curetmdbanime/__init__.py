@@ -97,7 +97,7 @@ class SeasonSplitter:
     def __init__(self, ctmdb: "CureTMDbAnime"):
         self.ctmdb = ctmdb
         self.curetmdb = CureTMDb(self.ctmdb._source)
-        self.bgm = BangumiAPIClient()
+        self.bgm = BangumiAPIClient(ua=settings.USER_AGENT)
 
     def from_tmdb(self, mediainfo: MediaInfo) -> Optional[LogicSeries]:
         """
@@ -139,10 +139,8 @@ class SeasonSplitter:
                 item = self._search_subjects(mediainfo.original_title, air_date())
                 return self.bgm.season_info(item)
 
-        seasons = ctmdb_derive()
-        if not seasons:
-            seasons = bangumi_derive()
-        if seasons:
+        seasons = ctmdb_derive() or bangumi_derive()
+        if seasons and seasons.max_season != mediainfo.number_of_seasons:
             return self._logic_seasons(mediainfo, seasons)
 
     def _search_subjects(self, title: str, air_date: Optional[int] = None) -> Optional[dict]:
@@ -236,6 +234,9 @@ class SeasonSplitter:
         self.curetmdb.clear()
         self.bgm.clear()
 
+    def close(self):
+        self.bgm.close()
+
     @staticmethod
     def is_date_diff_within(date_str1: str, date_str2: str, days_range: int = 3) -> bool:
         """
@@ -271,7 +272,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -372,7 +373,10 @@ class CureTMDbAnime(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        pass
+        try:
+            self.splitter.close()
+        except Exception:
+            pass
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
@@ -536,7 +540,12 @@ class CureTMDbAnime(_PluginBase):
                 return True
 
             # 发布组使用连续集号, TMDB分季时
-            elif len(mediainfo.seasons.get(season_num, [])) < episode_num <= mediainfo.number_of_episodes:
+            elif (
+                mediainfo.number_of_episodes
+                and len(mediainfo.seasons.get(season_num, []))
+                < episode_num
+                <= mediainfo.number_of_episodes
+            ):
                 offset = 0
                 for season_key, episodes_list in mediainfo.seasons.items():
                     if (found_episode := episode_num - offset) in episodes_list:
