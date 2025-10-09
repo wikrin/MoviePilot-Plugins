@@ -236,7 +236,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.1.1"
+    plugin_version = "1.1.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -522,7 +522,7 @@ class SubscribeCal(_PluginBase):
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             # 标题
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
-            runtime = epinfo.runtime or  valid_runtimes
+            runtime = epinfo.runtime or valid_runtimes
             # 全天事件
             if minutes is not None \
                 and runtime:
@@ -606,8 +606,7 @@ class SubscribeCal(_PluginBase):
         """获取日历事件数据"""
 
         _data = self.get_data(key=key) or {}
-        if _data:
-            return {k: CalendarEvent.parse_obj(v) for k, v in _data.items()}
+        return {k: CalendarEvent.parse_obj(v) for k, v in _data.items()}
 
     def get_events(self, keys: list[str] = None) -> Optional[Dict[str, CalendarEvent]]:
         events: dict[str, CalendarEvent] = {}
