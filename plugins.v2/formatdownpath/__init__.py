@@ -5,7 +5,7 @@ import threading
 from abc import ABCMeta, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 # 第三方库
 from apscheduler.triggers.cron import CronTrigger
@@ -19,8 +19,8 @@ from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
 from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, DownloadFiles
+from app.db.transferhistory_oper import TransferHistoryOper
 from app.db import db_update
-from app.db.models.plugindata import PluginData
 from app.helper.downloader import DownloaderHelper
 from app.helper.torrent import TorrentHelper
 from app.log import logger
@@ -66,9 +66,9 @@ class TorrentInfo:
     # 种子分类
     category: str = ""
     # 种子标签
-    tags: List[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
     # 种子文件列表
-    files: List[TorrentFile] = field(default_factory=list)
+    files: list[TorrentFile] = field(default_factory=list)
 
 
 class Downloader(metaclass=ABCMeta):
@@ -112,7 +112,7 @@ class Downloader(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
         """
         获取种子信息
         :param torrent_hash: 种子hash
@@ -136,7 +136,7 @@ class QbittorrentDownloader(Downloader):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
 
-    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
         """
         获取种子信息
         """
@@ -185,7 +185,7 @@ class TransmissionDownloader(Downloader):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_path)
 
-    def torrents_info(self, torrent_hash: str = None) -> List[TorrentInfo]:
+    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
         torrents = []
         try:
             if torrent_hash:
@@ -232,7 +232,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.3.0"
+    plugin_version = "1.3.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -267,8 +267,8 @@ class FormatDownPath(_PluginBase):
 
     def init_plugin(self, config: dict = None):
 
-        self.downloader_helper = DownloaderHelper()
         self.downloadhis = DownloadHistoryOper()
+        self.transferhis = TransferHistoryOper()
         # 停止现有任务
         self.stop_service()
         self.load_config(config)
@@ -294,7 +294,7 @@ class FormatDownPath(_PluginBase):
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
     @staticmethod
-    def get_render_mode() -> Tuple[str, Optional[str]]:
+    def get_render_mode() -> tuple[str, Optional[str]]:
         """
         获取插件渲染模式
         :return: 1、渲染模式，支持：vue/vuetify，默认vuetify；2、vue模式下编译后文件的相对路径，默认为`dist/assets`，vuetify模式下为None
@@ -304,7 +304,7 @@ class FormatDownPath(_PluginBase):
     def get_form(self):
         return [], {}
 
-    def get_service(self) -> List[Dict[str, Any]]:
+    def get_service(self) -> list[dict[str, Any]]:
         """
         注册插件公共服务
         """
@@ -362,7 +362,7 @@ class FormatDownPath(_PluginBase):
     def on_download_added(self, **kwargs):
         return self._event_enabled if self._event_enabled else None
 
-    def get_module(self) -> Dict[str, Any]:
+    def get_module(self) -> dict[str, Any]:
         """
         获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
         """
@@ -402,8 +402,11 @@ class FormatDownPath(_PluginBase):
         """
         if isinstance(hashs, str):
             hashs = [hashs]
-        for hash in hashs:
-            self.delete_data(key="processed", torrent_hash=hash)
+        for torrent_hash in hashs:
+            self.delete_data(key="processed", torrent_hash=torrent_hash)
+            if delete_file:
+                logger.warn(f"清理种子: {torrent_hash} 相关下载记录")
+                self.purge_download_records(*self.fetch_data(torrent_hash))
 
     def cron_process_main(self):
         """
@@ -417,14 +420,15 @@ class FormatDownPath(_PluginBase):
         processed: dict[str, str] = self.get_data(key="processed") or {}
         _processed_num = 0
 
-        def create_hash_mapping() -> Dict[str, List[str]]:
+        def create_hash_mapping() -> dict[str, list[str]]:
             """
             生成源种子hash表
             """
+            from app.db.models.plugindata import PluginData
             # 辅种插件数据
-            assist: List[PluginData] = self.get_data(key=None, plugin_id="IYUUAutoSeed") or []
+            assist: list[PluginData] = self.get_data(key=None, plugin_id="IYUUAutoSeed") or []
             # 辅种数据映射表 key: 源种hash, value: 辅种hash列表
-            _mapping: dict[str, List[str]] = {}
+            _mapping: dict[str, list[str]] = {}
 
             if assist:
                 for seed_data in assist:
@@ -448,7 +452,7 @@ class FormatDownPath(_PluginBase):
         processed_hashes = set(processed.keys()) if processed else set()
         pending_hashes = set(pending.keys()) if pending else set()
         # 预处理下载器列表
-        valid_downloaders: List[Tuple[str, Downloader]] = []
+        valid_downloaders: list[tuple[str, Downloader]] = []
         for d in self._downloader:
             self.set_downloader(d)
             if self.downloader is not None:
@@ -484,7 +488,7 @@ class FormatDownPath(_PluginBase):
             logger.info(f"下载器 {d_name} 待处理种子数量: {len(torrents_info)}")
             for torrent_info in torrents_info:
                 _hash = seed_to_source_hash.get(torrent_info.hash, torrent_info.hash)
-                downloadhis = DownloadHistoryOper().get_by_hash(_hash or torrent_info.hash)
+                downloadhis = self.downloadhis.get_by_hash(_hash or torrent_info.hash)
                 # 执行处理
                 if self.main(torrent_info=torrent_info, downloadhis=downloadhis):
                     # 添加到已处理数据库
@@ -565,6 +569,10 @@ class FormatDownPath(_PluginBase):
                 if not media_info:
                     logger.error(f"识别媒体信息失败，种子名称：{torrent_info.name}")
                     success = False
+            if success and not settings.SCRAP_FOLLOW_TMDB:
+                transfer_history = self.transferhis.get_by_type_tmdbid(media_info.type.value, media_info.tmdb_id)
+                if transfer_history:
+                    media_info.title = transfer_history.title
             if success:
                 if self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info):
                     logger.info(f"种子 {torrent_info.name} 处理完成")
@@ -696,8 +704,6 @@ class FormatDownPath(_PluginBase):
         torrent = context.torrent_info
         if not torrent.page_url:
             return
-        # 字幕下载目录
-        logger.info("开始从站点下载字幕：%s" % torrent.page_url)
         # 读取网站代码
         request = RequestUtils(cookies=torrent.site_cookie, ua=torrent.site_ua)
         res = request.get_res(torrent.page_url)
@@ -773,14 +779,10 @@ class FormatDownPath(_PluginBase):
                     continue
             if sublink_list:
                 logger.info(f"{torrent.page_url} 页面字幕下载完成")
-            else:
-                logger.warn(f"{torrent.page_url} 页面未找到字幕下载链接")
         elif res is not None:
             logger.warn(f"连接 {torrent.page_url} 失败，状态码：{res.status_code}")
-        else:
-            logger.warn(f"无法打开链接：{torrent.page_url}")
 
-    def recover_from_history(self, request: Dict[str, str]):
+    def recover_from_history(self, request: dict[str, str]):
         """
         从处理历史中恢复
         :param downloader: 下载器
@@ -886,7 +888,7 @@ class FormatDownPath(_PluginBase):
         if data:
             return {"name": data.get('name'), "files_count": len(data.get('files')), "save_path": data.get('save_path')}
 
-    def fetch_data(self, torrent_hash: str) -> Optional[Tuple[Dict[int, dict], Dict[int, dict]]]:
+    def fetch_data(self, torrent_hash: str) -> tuple[dict[int, dict], dict[int, dict]]:
         """
         使用哈希查询数据库中的下载记录和文件记录
         """
@@ -894,7 +896,7 @@ class FormatDownPath(_PluginBase):
         download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
         his = {download_history.id: {"path": download_history.path}} if download_history else {}
         # 查询文件下载记录
-        download_files: List[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
+        download_files: list[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
         downfiles = {file.id: {"fullpath": file.fullpath, "savepath": file.savepath, "filepath": file.filepath} for file in download_files} if download_files else {}
         return his, downfiles
 
@@ -902,8 +904,8 @@ class FormatDownPath(_PluginBase):
         """
         获取下载器
         """
-        if service := self.downloader_helper.get_service(name=downloader):
-            if self.downloader_helper.is_downloader("qbittorrent", service.config):
+        if service := DownloaderHelper().get_service(name=downloader):
+            if DownloaderHelper().is_downloader("qbittorrent", service.config):
                 if service.instance.qbc:
                     self.downloader: Downloader = QbittorrentDownloader(qbc=service.instance)
                     return
@@ -940,7 +942,7 @@ class FormatDownPath(_PluginBase):
             del plugin_data[torrent_hash]
             self.save_data(key=key, value=plugin_data)
 
-    def update_db(self, torrent_hash: str, downloadhis: Optional[Dict[int, dict]], downfiles: Optional[Dict[int, dict]]):
+    def update_db(self, torrent_hash: str, downloadhis: Optional[dict[int, dict]], downfiles: Optional[dict[int, dict]]):
         """
         更新数据库
         """
@@ -952,6 +954,23 @@ class FormatDownPath(_PluginBase):
         if downfiles:
             for id, data in downfiles.items():
                 self.update_download_file_by_hash(db=db, db_id=id, torrent_hash=torrent_hash, payload=data)
+
+    def purge_download_records(self, downloadhis: Optional[dict[int, dict]], downfiles: Optional[dict[int, dict]]):
+        """
+        清除下载记录与文件记录
+        """
+        if not downloadhis and not downfiles:
+            logger.warn("无相关下载记录")
+            return
+        if downloadhis:
+            for db_id in downloadhis.keys():
+                self.downloadhis.delete_history(db_id)
+            logger.warn(f"相关下载记录已删除 {len(downloadhis)} 条")
+        if downfiles:
+            for db_id in downfiles.keys():
+                self.downloadhis.delete_downloadfile(db_id)
+            logger.warn(f"相关下载文件记录已删除 {len(downfiles)} 条")
+
     @staticmethod
     def format_path(
         template_string: str,
@@ -974,7 +993,7 @@ class FormatDownPath(_PluginBase):
         )
 
     @staticmethod
-    def update_path(downloadhis: Dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> Tuple[Dict[int, dict], Dict[int, dict]]:
+    def update_path(downloadhis: dict[int, dict], downfiles: dict, old_path: str, new_path: str) -> tuple[dict[int, dict], dict[int, dict]]:
 
         def safe_replace(d: dict[str, str], old: str, new: str):
             """
@@ -999,7 +1018,7 @@ class FormatDownPath(_PluginBase):
 
     @staticmethod
     @db_update
-    def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
+    def update_download_file_by_hash(db: Session, db_id: int, torrent_hash: str, payload: dict[str, Any]):
         payload = {k: v for k, v in payload.items() if v is not None}
         db.query(DownloadFiles).filter(
             DownloadFiles.download_hash == torrent_hash \
@@ -1007,7 +1026,7 @@ class FormatDownPath(_PluginBase):
 
     @staticmethod
     @db_update
-    def update_download_history_by_hash(db: Session, db_id: int, torrent_hash: str, payload: Dict[str, Any]):
+    def update_download_history_by_hash(db: Session, db_id: int, torrent_hash: str, payload: dict[str, Any]):
         payload = {k: v for k, v in payload.items() if v is not None}
         db.query(DownloadHistory).filter(
             DownloadHistory.download_hash == torrent_hash \
