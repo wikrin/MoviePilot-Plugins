@@ -29,7 +29,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.2.0"
+    plugin_version = "2.2.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -253,7 +253,7 @@ class NotifyExt(_PluginBase):
                 continue
 
             # 消息聚合
-            if rule.aggregate and self.aggregator.try_aggregate_message(message, rule, result):
+            if self.aggregator.try_aggregate_message(message, rule, result):
                 # 消息聚合后截断run_module后续执行
                 return True
 

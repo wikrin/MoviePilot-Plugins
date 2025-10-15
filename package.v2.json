@@ -57,11 +57,12 @@
       "name": "消息通知扩展",
       "description": "拦截设定时间内重复消息，根据规则聚合/分发消息",
       "labels": "工具, 消息通知",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "2.2.1": "修复消息聚合逻辑与媒体已播放时间获取问题",
         "2.2.0": "新增消息聚合配置页面, 降低配置复杂度",
         "2.1.5": "将`媒体库服务器通知`消息类型拆分为多项",
         "2.1.0": "添加内置规则(媒体服务器 - 媒体库服务器通知)",

@@ -18,7 +18,10 @@ class MediaServerMsgHandler(BaseFrameHandler):
         if channel == "jellyfin":
             return data.get("RunTime")
         elif channel == "emby":
-            return TimeUtils.runtime_format(data.get("RunTimeTicks") // 10000)
+            return TimeUtils.runtime_format(
+                data.get("RunTimeTicks", data.get("Item", {}).get("RunTimeTicks", 0))
+                // 10000
+            )
         else:
             return None
 

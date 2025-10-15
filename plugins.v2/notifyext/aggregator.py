@@ -31,6 +31,9 @@ class MessageAggregator(metaclass=SingletonClass):
         exclude_pattern = aggregate.exclude
         include_pattern = aggregate.include
 
+        if not exclude_pattern and not include_pattern and aggregate.wait_time <= 0:
+            return False
+
         # 收集有效的字符串属性值
         attr_values = [
             value for attr in allowed_attrs
@@ -61,7 +64,7 @@ class MessageAggregator(metaclass=SingletonClass):
 
     def add_message(self, message: Notification, rule: NotificationRule, context: dict):
         wait_time = rule.aggregate.wait_time
-        if rule.aggregate.wait_time <= 0:
+        if wait_time <= 0:
             # 作为拦截处理
             logger.warn(f"聚合时间小于等于0，将作为拦截处理")
             return
