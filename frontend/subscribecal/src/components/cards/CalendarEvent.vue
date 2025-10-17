@@ -33,48 +33,23 @@ const handleDialogClick = (event: Event) => {
   }
 }
 
-/**
- * 将 %Y%m%dT%H%M%SZ 格式的时间字符串转为 Date 对象（UTC 时间）
- * @param dateStr 输入格式如 '20250405T160000Z'
- * @returns {Date|null} 解析后的 UTC 时间 Date 对象，失败返回 null
- */
-const parseUTCDateTime = (dateStr: string): Date | null => {
-  // 简单校验格式是否符合 YYYYMMDDTHHMMSSZ
-  const regex = /^\d{8}T\d{6}Z$/
-  if (!regex.test(dateStr)) {
-    console.warn(`Invalid date format: ${dateStr}`)
-    return null
-  }
-
-  const year = parseInt(dateStr.slice(0, 4), 10)
-  const month = parseInt(dateStr.slice(4, 6), 10) - 1 // 月份从 0 开始
-  const day = parseInt(dateStr.slice(6, 8), 10)
-  const hour = parseInt(dateStr.slice(9, 11), 10)
-  const minute = parseInt(dateStr.slice(11, 13), 10)
-  const second = parseInt(dateStr.slice(13, 15), 10)
-
-  // 使用 UTC 时间构造
-  return new Date(Date.UTC(year, month, day, hour, minute, second))
-}
-
 function getStatusColor(event: TimeLineItem): string {
-  // 如果开始和结束时间都是 16:00，则认为时间不准确
-  if (event.dtstart?.slice(9, 13) === '1600' && event.dtend?.slice(9, 13) === '1600') {
+  const startHour = event.dtstart?.getHours() ?? -1
+  const startMinute = event.dtstart?.getMinutes() ?? -1
+  const endHour = event.dtend?.getHours() ?? -1
+  const endMinute = event.dtend?.getMinutes() ?? -1
+  // 事件时间为00:00 - 23:59 则认为时间不准确
+  if (startHour === 0 && startMinute === 0 && endHour === 23 && endMinute === 59) {
     return '#9C27B0' // 深紫红 - 时间不准确
   }
 
-  const date = parseUTCDateTime(event.dtstart)
-  if (!date) return '#CCCCCC' // 浅灰 - 默认未知状态
+  if (!event.dtstart) return '#CCCCCC' // 浅灰 - 默认未知状态
 
-  // 转换为本地时间
-  const localDate = new Date(date.getTime() + new Date().getTimezoneOffset() * 60000)
-  const localHour = localDate.getHours()
-
-  if (localHour >= 6 && localHour < 12) return '#FFA000' // 橘黄色 - 上午
-  else if (localHour >= 12 && localHour < 14) return '#FFF176' // 浅金黄 - 中午
-  else if (localHour >= 14 && localHour < 18) return '#4DD0E1' // 天蓝 - 下午
-  else if (localHour >= 18 && localHour < 20) return '#FB8C00' // 橘红 - 傍晚
-  else if (localHour >= 20 || localHour < 6) return '#303F9F' // 深蓝紫 - 夜间/凌晨
+  if (startHour >= 6 && startHour < 12) return '#FFA000' // 橘黄色 - 上午
+  else if (startHour >= 12 && startHour < 14) return '#FFF176' // 浅金黄 - 中午
+  else if (startHour >= 14 && startHour < 18) return '#4DD0E1' // 天蓝 - 下午
+  else if (startHour >= 18 && startHour < 20) return '#FB8C00' // 橘红 - 傍晚
+  else if (startHour >= 20 || startHour < 6) return '#303F9F' // 深蓝紫 - 夜间/凌晨
 
   return '#CCCCCC' // 默认浅灰色
 }
@@ -87,14 +62,11 @@ const sortedEvents = computed(() => {
   }
 
   return events
-    .filter(event => event?.dtstart)
+    .filter(event => event.dtstart)
     .sort((a, b) => {
-      const formatDateString = (dateStr: string): string => {
-        return `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}T${dateStr.slice(9, 11)}:${dateStr.slice(11, 13)}:${dateStr.slice(13, 15)}Z`
-      }
 
-      const dateA = Date.parse(formatDateString(a.dtstart))
-      const dateB = Date.parse(formatDateString(b.dtstart))
+      const dateA = a.dtstart.getTime()
+      const dateB = b.dtstart.getTime()
 
       // 非法日期排在后面
       if (isNaN(dateA)) return 1
@@ -188,9 +160,9 @@ function getIconForEventType(type: string): string {
               :icon="getIconForEventType(event.type)"
               fill-dot
             >
-              <VCard>
-              <div class="d-flex justify-space-between flex-nowrap flex-row">
-                <div class="ma-auto">
+            <VCard class="pl-4">
+              <div class="d-flex flex-row align-center">
+                <div class="mr-4">
                   <VImg
                     height="75"
                     width="50"
@@ -215,8 +187,8 @@ function getIconForEventType(type: string): string {
                     <span class="mr-4">{{ event.vote ?? '暂无' }}</span>
                     <v-icon small color="primary" class="mr-1">mdi-clock-time-four-outline</v-icon>
                     <span>
-                      {{ parseUTCDateTime(event.dtstart)?.toTimeString().slice(0, 5) }} -
-                      {{ parseUTCDateTime(event.dtend)?.toTimeString().slice(0, 5) }}
+                      {{ event.dtstart.toTimeString().slice(0, 5) }} -
+                      {{ event.dtend.toTimeString().slice(0, 5) }}
                     </span>
                   </VCardText>
                 </div>

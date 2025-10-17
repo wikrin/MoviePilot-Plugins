@@ -2,9 +2,9 @@ export interface TimeLineItem {
   // 订阅表ID
   id: number
   // 起始时间
-  dtstart: string
+  dtstart: Date
   // 结束时间
-  dtend: string
+  dtend: Date
   // 标题
   summary: string
   // 描述

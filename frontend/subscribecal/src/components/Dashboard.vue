@@ -24,70 +24,123 @@ const timeLineGroups = reactive<TimeLineGroup[]>([])
 
 // 组件状态
 const loading = ref<boolean>(true)
-const userScrolled = ref(false); // 是否发生过用户滑动
-let fixedBaseIndex = -1; // 固定的 baseIndex，仅在用户滑动后生效
+const userScrolled = ref(false) // 是否发生过用户滑动
+let fixedBaseIndex = -1 // 固定的 baseIndex，仅在用户滑动后生效
 
 // 当前已加载的天数范围
 const loadedRange = reactive({
   before: 0, // 已加载的过去天数
   after: 0,  // 已加载的未来天数
-});
+})
 
-async function fetchTimeLineGroups(beforeDays, afterDays) {
+async function fetchTimeLineGroups(beforeDays: number, afterDays: number) {
   try {
-    const res: Object = await props.api.get(`plugin/SubscribeCal/grouped_events`, {
+    const res: any[] = await props.api.get(`plugin/SubscribeCal/grouped_events`, {
       params: { before_days: beforeDays, after_days: afterDays }
-    });
+    })
 
-    // 提取并排序
-    const groups = Object.entries(res)
-      .map(([date, items]) => ({
-        date,
-        items
-      }))
-      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    // 按日期分组
+    const grouped = new Map<string, TimeLineGroup>()
 
-    // 使用Map进行去重，保证每个日期只保留一条数据
-    const uniqueGroups = new Map();
+    res.forEach(item => {
+      // 解析UTC时间
+      const startDate = parseUTCDateTime(item.dtstart)
+
+      if (startDate) {
+        const localDateStr = getLocalISODateString(startDate)
+        const endDate = parseUTCDateTime(item.dtend)
+
+        if (endDate) item.dtend = endDate
+        // 格式化项目，使用解析后的Date对象
+        const formattedItem = {
+          ...item,
+          // 使用本地时间
+          dtstart: startDate,
+        }
+
+        if (!grouped.has(localDateStr)) {
+          grouped.set(localDateStr, {
+            date: localDateStr,
+            items: []
+          })
+        }
+
+        grouped.get(localDateStr)!.items.push(formattedItem)
+      }
+    })
+
+    // 转换为数组并排序
+    const groups = Array.from(grouped.values())
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+    // 去重
+    const uniqueGroups = new Map<string, TimeLineGroup>()
     groups.forEach(group => {
       if (!uniqueGroups.has(group.date)) {
-        uniqueGroups.set(group.date, group);
+        uniqueGroups.set(group.date, group)
       }
-    });
+    })
 
-    const filteredGroups = Array.from(uniqueGroups.values());
+    const filteredGroups = Array.from(uniqueGroups.values())
 
     if (beforeDays > loadedRange.before) {
       // 添加过往数据
-      timeLineGroups.unshift(...filteredGroups);
-      loadedRange.before = beforeDays;
+      timeLineGroups.unshift(...filteredGroups)
+      loadedRange.before = beforeDays
     }
 
     if (afterDays > loadedRange.after) {
       // 添加未来数据
-      timeLineGroups.push(...filteredGroups);
-      loadedRange.after = afterDays;
+      timeLineGroups.push(...filteredGroups)
+      loadedRange.after = afterDays
     }
   } catch (error) {
-    console.error(error);
+    console.error(error)
   }
 }
 
+/**
+ * 将 %Y%m%dT%H%M%SZ 格式的时间字符串转为 Date 对象（UTC 时间）
+ * @param dateStr 输入格式如 '20250405T160000Z'
+ * @returns {Date|null} 解析后的 本地时间 Date 对象，失败返回 null
+ */
+ const parseUTCDateTime = (dateStr: string): Date | null => {
+  // 简单校验格式是否符合 YYYYMMDDTHHMMSSZ
+  const regex = /^\d{8}T\d{6}Z$/
+  if (!regex.test(dateStr)) {
+    console.warn(`Invalid date format: ${dateStr}`)
+    return null
+  }
+
+  const year = parseInt(dateStr.slice(0, 4), 10)
+  const month = parseInt(dateStr.slice(4, 6), 10) - 1 // 月份从 0 开始
+  const day = parseInt(dateStr.slice(6, 8), 10)
+  const hour = parseInt(dateStr.slice(9, 11), 10)
+  const minute = parseInt(dateStr.slice(11, 13), 10)
+  const second = parseInt(dateStr.slice(13, 15), 10)
+
+  return new Date(Date.UTC(year, month, day, hour, minute, second))
+}
+
+function getLocalISODateString(date: Date = new Date()): string {
+  const offset = date.getTimezoneOffset() * 60000
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10)
+}
 
 function getBaseIndex(): number {
   if (userScrolled.value && fixedBaseIndex >= 0) {
-    return fixedBaseIndex;
+    return fixedBaseIndex
   }
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todayIndex = timeLineGroups.findIndex(g => g.date === todayStr);
+  const todayStr = getLocalISODateString()
+  const todayIndex = timeLineGroups.findIndex(g => g.date === todayStr)
 
   if (todayIndex !== -1) {
-    return todayIndex;
+    return todayIndex
   }
 
   const futureIndex = timeLineGroups.findIndex(g => {
-    const groupDate = new Date(g.date);
-    const today = new Date();
+    const groupDate = new Date(g.date)
+    const today = new Date()
     return groupDate >= new Date(today.getFullYear(), today.getMonth(), today.getDate())
   })
 
