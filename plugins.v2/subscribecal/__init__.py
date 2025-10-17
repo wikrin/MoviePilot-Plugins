@@ -1,6 +1,5 @@
 # 基础库
 import re
-from cachetools import TTLCache
 from dataclasses import dataclass
 import datetime
 import statistics
@@ -16,6 +15,7 @@ import pytz
 
 # 项目库
 from app.chain.subscribe import Subscribe
+from app.core.cache import Cache
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
@@ -27,7 +27,7 @@ from app.plugins import _PluginBase
 from app.schemas.types import EventType, MediaType
 
 
-result_cache = TTLCache(maxsize=1000, ttl=3600 * 12)
+result_cache = Cache(maxsize=1000, ttl=3600 * 12)
 # 本地时区
 TZ = pytz.timezone(settings.TZ)
 
@@ -80,6 +80,10 @@ class CalendarEvent(BaseModel):
     summary: Optional[str]
     # 描述(备注)
     description: Optional[str]
+    # 季
+    season: Optional[int]
+    # 集
+    episode: Optional[int]
     # 地点
     location: Optional[str]
     # 唯一标识
@@ -236,7 +240,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.1.2"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -250,6 +254,7 @@ class SubscribeCal(_PluginBase):
 
     # 私有属性
     _scheduler = None
+    _search_sub_region = "plugin.subscribecal.search_sub"
 
     # 配置属性
     _enabled: bool = False
@@ -425,7 +430,7 @@ class SubscribeCal(_PluginBase):
             _ics += f"{event.to_ics()}\n"
         return _ics + "END:VCALENDAR"
 
-    def get_ics(self,) -> str:
+    def get_ics(self) -> str:
         """获取ics内容"""
         _events = self.get_events(self.keys)
         return Response(content=self.generate_ics_content(_events), media_type="text/plain")
@@ -448,9 +453,11 @@ class SubscribeCal(_PluginBase):
         for sub in subs:
             # 跳过洗版
             if sub.best_version: continue
-            _info = self.serach_sub(sub=sub, cache=cache)
+            _info = self.search_sub(sub=sub, cache=cache)
             if not _info: continue
-            key = self.media_process(sub=sub, mediainfo=_info[0], cal_info=_info[1])
+            key = self.media_process(sub, *_info)
+            if key is None:
+                continue
             _tmp_keys.append(key)
         # 去除删除的订阅
         if _d := set(self.keys) - set(_tmp_keys):
@@ -465,21 +472,24 @@ class SubscribeCal(_PluginBase):
         if not event or not self._enabled:
             return
         if sub := SubscribeOper().get(event.event_data.get("subscribe_id", None)):
-            _info = self.serach_sub(sub=sub, cache=False)
-            key = self.media_process(sub=sub, mediainfo=_info[0], cal_info=_info[1])
+            _info = self.search_sub(sub=sub, cache=False)
+            key = self.media_process(sub, *_info)
+            if key is None:
+                return
+
             self.keys.append(key)
             # 保存数据
             self.save_keys(self.keys)
 
-    def serach_sub(self, sub: Subscribe, cache: bool = True) -> Optional[Tuple[MediaInfo, List[CalendarInfo]]]:
+    def search_sub(self, sub: Subscribe, cache: bool = True) -> Optional[Tuple[MediaInfo, List[CalendarInfo]]]:
         """搜索订阅"""
-        cachekey = f"__cache_{sub.tmdbid}_{sub.year}_{sub.season}__"
+        cache_params = {"key": self.get_sub_key(sub), "region": self._search_sub_region}
         mediainfo = self.chain.recognize_media(tmdbid=sub.tmdbid, doubanid=sub.doubanid, bangumiid=sub.bangumiid,
                                                 episode_group=sub.episode_group, mtype=MediaType(sub.type), cache=cache)
         info = None
-        if cache and result_cache and cachekey in result_cache:
+        if cache and result_cache and result_cache.exists(**cache_params):
+            info = result_cache.get(**cache_params)
             logger.info(f"{sub.name}({sub.year}) 使用缓存数据")
-            info = result_cache[cachekey]
         elif sub.type == MediaType.TV.value:
             if sub.episode_group:
                 if result := TmdbApi().get_tv_group_detail(group_id=sub.episode_group, season=sub.season):
@@ -491,19 +501,21 @@ class SubscribeCal(_PluginBase):
         else:
             info = [CalendarInfo(**mediainfo.tmdb_info)]
         if info:
+            result_cache.set(value=info, **cache_params)
             logger.debug(f"{sub.name}({sub.year}) 已缓存")
-            result_cache[cachekey] = info
         else:
             logger.warn(f"{sub.name}({sub.year}) 获取信息失败")
-            return None
         return mediainfo, info
 
-    def media_process(self, sub: Subscribe, mediainfo: MediaInfo, cal_info: list[CalendarInfo]) -> str:
+    def media_process(self, sub: Subscribe, mediainfo: MediaInfo, cal_info: list[CalendarInfo]) -> Optional[str]:
         """
         :param: Subscribe对象
         :param cal_info: TMDB剧集播出时间
         :return: key, List[CalendarEvent]
         """
+        if not mediainfo or not cal_info:
+            return
+
         _key = self.get_sub_key(sub)
         # 剧集播出时间
         minutes = (
@@ -524,28 +536,33 @@ class SubscribeCal(_PluginBase):
             title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
             runtime = epinfo.runtime or valid_runtimes
             # 全天事件
-            if minutes is not None \
-                and runtime:
-                # start - airdatetime
-                dtend = epinfo.utc_airdate(minutes + runtime)
+            if minutes is not None:
+                if runtime:
+                    # start - airdatetime
+                    dtend = epinfo.utc_airdate(minutes + runtime)
+                else:
+                    # start - 23:59
+                    dtend = epinfo.utc_airdate(-minutes % 1440 + minutes - 1)
             else:
-                # 0:00 - 24:00
-                dtend = epinfo.utc_airdate(60 * 24)
+                # 0:00 - 23:59
+                dtend = epinfo.utc_airdate(1440 - 1)
             cal.summary=title
             cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
             cal.dtend=dtend
+            cal.season=epinfo.season_number
+            cal.episode=epinfo.episode_number
             event_data[str(epinfo.id)] = cal
         # 保存事件数据
         self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
         logger.info(f"{mediainfo.title_year} 日历事件处理完成")
         return _key
 
-    def get_grouped_events(self, before_days: int = 3, after_days: int = 3) -> dict[str, list[TimeLineItem]]:
+    def get_grouped_events(self, before_days: int = 3, after_days: int = 3) -> list[TimeLineItem]:
         """
         返回给前端特定数据
         """
-        groups: dict[str, list[TimeLineItem]] = {}
+        timeline_items: list[TimeLineItem] = []
         # 日期范围(最近一周)
         date_range = self.get_date_strings(before_days, after_days)
         # 获取所有订阅
@@ -558,12 +575,9 @@ class SubscribeCal(_PluginBase):
             for _, epinfo in event_data.items():
                 date = self.format_date_from_dtstart(epinfo.dtstart)
                 if date in date_range:
-                    episode = None
-                    if match := re.search(r"$$(\d+)/\d+$$", epinfo.summary):
-                        episode = int(match.group(1))
-                    groups.setdefault(date, []).append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}, episode=episode))
+                    timeline_items.append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}))
 
-        return groups
+        return timeline_items
 
     @staticmethod
     def compute_median_runtime(cal_items: list[CalendarInfo]):

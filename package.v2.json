@@ -37,11 +37,12 @@
       "name": "订阅日历",
       "description": "根据订阅生成日历, 以供导入至设备日历中",
       "labels": "工具, 订阅",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.2.0": "优化竖向时间线样式, 修复日期错误分组 (显示异常重新运行一次插件或重置)",
         "1.1.2": "错误修复",
         "1.1.0": "修复了`访问未赋值变量`的错误",
         "1.0.9": " 修改时间轴颜色方案，添加垂直时间轴滚动",
