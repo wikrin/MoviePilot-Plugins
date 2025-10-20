@@ -1,5 +1,6 @@
 # 基础库
-import threading
+import contextvars
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List, Tuple
@@ -177,14 +178,9 @@ class SeasonSplitter:
 
         tmdb_seasons = []
         for season in range(current_season, mediainfo.number_of_seasons + 1):
-            try:
-                self.ctmdb.flag = True
+            with self.ctmdb.no_recursion():
                 if tmdb_season := self.ctmdb.chain.tmdb_info(mediainfo.tmdb_id, mediainfo.type, season):
                     tmdb_seasons.append(tmdb_season)
-            except Exception as e:
-                logger.error(f"获取第 {season} 季信息失败: {str(e)}")
-            finally:
-                del self.ctmdb.flag
         if not tmdb_seasons:
             return None
         try:
@@ -272,7 +268,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -285,7 +281,7 @@ class CureTMDbAnime(_PluginBase):
     auth_level = 1
 
     # 私有属性
-    _local = threading.local()
+    _contextvars = contextvars.ContextVar("recursion_flag", default=False)
 
     # 配置属性
     _enabled: bool = False
@@ -300,21 +296,14 @@ class CureTMDbAnime(_PluginBase):
             "clear_cache",
         )
 
-    @property
-    def flag(self) -> bool:
-        """获取 flag 属性是否存在"""
-        return getattr(type(self)._local, "flag", False)
-
-    @flag.setter
-    def flag(self, value: bool):
-        """设置 flag 属性"""
-        setattr(type(self)._local, "flag", value)
-
-    @flag.deleter
-    def flag(self):
-        """删除 flag 属性"""
-        if hasattr(type(self)._local, "flag"):
-            delattr(type(self)._local, "flag")
+    @contextmanager
+    def no_recursion(self):
+        """防递归上下文管理器"""
+        token = self._contextvars.set(True)
+        try:
+            yield
+        finally:
+            self._contextvars.reset(token)
 
     @property
     def has_background_service(self) -> bool:
@@ -488,7 +477,8 @@ class CureTMDbAnime(_PluginBase):
         }
 
     def is_eligible(self, tmdbid: int = None, mtype: MediaType = None, episode_group: Optional[str] = None) -> bool:
-        if self.flag:
+
+        if self._contextvars.get():
             return False
 
         if settings.RECOGNIZE_SOURCE != "themoviedb":
@@ -565,7 +555,7 @@ class CureTMDbAnime(_PluginBase):
         corrected = adjust_episode(True) | adjust_episode(False)
 
         if corrected:
-            logger.info(f"元数据季集已调整：{orig_season_episode} ==> {meta.season_episode}")
+            logger.info(f"{mediainfo.title_year} 元数据季集已调整：{orig_season_episode} ==> {meta.season_episode}")
 
         return corrected
 
@@ -588,8 +578,7 @@ class CureTMDbAnime(_PluginBase):
         if meta and not tmdbid and not meta.name:
             return None
 
-        try:
-            self.flag = True
+        with self.no_recursion():
             media_info = self.chain.recognize_media(
                 meta=meta,
                 tmdbid=tmdbid,
@@ -598,11 +587,6 @@ class CureTMDbAnime(_PluginBase):
                 cache=cache,
                 **kwargs
             )
-        except Exception as e:
-            logger.error(f"识别媒体信息出错：{e}")
-            media_info = None
-        finally:
-            del self.flag
         # 识别失败，阻止run_module继续执行
         if media_info is None:
             return False
@@ -859,19 +843,17 @@ class CureTMDbAnime(_PluginBase):
         :param mediainfo:  识别的媒体信息
         :return: None
         """
-        if not self.is_eligible(mediainfo.tmdb_id, mediainfo.type, mediainfo.episode_group):
+        if mediainfo.type != MediaType.TV:
             return None
 
-        if self.correct_meta(meta, mediainfo):
-            try:
-                kwargs["episodes_info"] = self.on_tmdb_episodes(mediainfo.tmdb_id, meta.begin_season)
-                self.flag = True
-                return self.chain.transfer(
-                    meta=meta,
-                    mediainfo=mediainfo,
-                    **kwargs
-                )
-            except Exception as e:
-                logger.error(f"文件整理出错：{e}")
-            finally:
-                del self.flag
+        if self.correct_meta(meta, mediainfo) and self.is_eligible(
+            tmdbid=mediainfo.tmdb_id,
+            mtype=mediainfo.type,
+            episode_group=mediainfo.episode_group,
+        ):
+            kwargs["episodes_info"] = self.on_tmdb_episodes(
+                mediainfo.tmdb_id,
+                meta.begin_season,
+            )
+            with self.no_recursion():
+                return self.chain.transfer(meta=meta, mediainfo=mediainfo, **kwargs)
