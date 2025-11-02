@@ -119,7 +119,7 @@ class EnrichWebhook(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/path_a.png"
     # 插件版本
-    plugin_version = "1.0.2"
+    plugin_version = "1.0.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -130,9 +130,6 @@ class EnrichWebhook(_PluginBase):
     plugin_order = 12
     # 可使用的用户级别
     auth_level = 1
-
-    # 私有属性
-    _scheduler = None
 
     # 配置属性
     _enabled: bool = False
@@ -190,13 +187,7 @@ class EnrichWebhook(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        try:
-            if self._scheduler:
-                self._scheduler.remove_all_jobs()
-                self._scheduler.shutdown()
-                self._scheduler = None
-        except Exception as e:
-            logger.error(f"退出插件失败：{str(e)}")
+        pass
 
     def get_api(self):
         pass
@@ -225,8 +216,6 @@ class EnrichWebhook(_PluginBase):
             logger.warning("未能获取到有效的 webhook 消息")
             return None
 
-        logger.debug(f"当前 webhookinfo 内容：{webhookinfo.dict()}")
-
         if webhookinfo.item_path is None:
             logger.debug("item_path 为空，开始补充路径信息")
             jellyfin_ext = JellyfinExtension(serverinfo.instance)
@@ -254,6 +243,7 @@ class EnrichWebhook(_PluginBase):
             logger.info(f"获取到 Jellyfin 服务器信息：{serverinfo.name}")
             webhookinfo: WebhookEventInfo = serverinfo.instance.get_webhook_message(body)
             if webhookinfo:
+                webhookinfo.server_name = serverinfo.name
                 logger.debug(f"从服务器 {serverinfo.name} 获取到 webhook 消息")
             return webhookinfo, serverinfo
 
