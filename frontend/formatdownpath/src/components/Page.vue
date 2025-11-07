@@ -59,7 +59,7 @@ const fetchProcessedData = async () => {
     const response = await props.api.get(`plugin/FormatDownPath/processed_data`)
 
     processedData.value = response
-    allHashes.value = Object.keys(response)
+    allHashes.value = Object.keys(response).reverse()
     console.log('成功加载基础数据，共', allHashes.value.length, '条记录')
 
     // 重置分页状态

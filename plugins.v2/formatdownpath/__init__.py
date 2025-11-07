@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 # 项目库
 from app.core.config import settings
-from app.core.context import MediaInfo, TorrentInfo, Context
+from app.core.context import MediaInfo, Context
 from app.core.event import eventmanager, Event
 from app.core.meta.metabase import MetaBase
 from app.core.metainfo import MetaInfo, MetaInfoPath
@@ -112,7 +112,7 @@ class Downloader(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
+    def torrents_info(self, torrent_hash: Optional[str] = None) -> list[TorrentInfo]:
         """
         获取种子信息
         :param torrent_hash: 种子hash
@@ -136,7 +136,7 @@ class QbittorrentDownloader(Downloader):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.qbc.torrents_rename_file(torrent_hash=torrent_hash, old_path=old_path, new_path=new_path)
 
-    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
+    def torrents_info(self, torrent_hash: Optional[str] = None) -> list[TorrentInfo]:
         """
         获取种子信息
         """
@@ -160,7 +160,8 @@ class QbittorrentDownloader(Downloader):
                         for file in torrent_info.files
                     ]
                 ))
-            return torrents
+
+        return torrents
 
 
 class TransmissionDownloader(Downloader):
@@ -185,7 +186,7 @@ class TransmissionDownloader(Downloader):
     def rename_file(self, torrent_hash: str, old_path: str, new_path: str) -> None:
         self.trc.rename_torrent_path(torrent_id=torrent_hash, location=old_path, name=new_path)
 
-    def torrents_info(self, torrent_hash: str = None) -> list[TorrentInfo]:
+    def torrents_info(self, torrent_hash: Optional[str] = None) -> list[TorrentInfo]:
         torrents = []
         try:
             if torrent_hash:
@@ -232,7 +233,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.3.1"
+    plugin_version = "1.3.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -246,6 +247,10 @@ class FormatDownPath(_PluginBase):
 
     # 私有属性
     _lock = threading.Lock()
+    _site_subtitle_xpath = [
+        '//td[@class="rowhead"][text()="字幕"]/following-sibling::td//a/@href',
+        '//div[contains(@class, "torrent-subtitles")]//a[contains(@href, "download")]/@href',
+    ]
 
     # 配置属性
     _cron: str = ""
@@ -260,12 +265,8 @@ class FormatDownPath(_PluginBase):
     _format_torrent_name: str = ""
     _format_movie_path: str = ""
     _format_tv_path: str = ""
-    _site_subtitle_xpath = [
-        '//td[@class="rowhead"][text()="字幕"]/following-sibling::td//a/@href',
-        '//div[contains(@class, "torrent-subtitles")]//a[contains(@href, "download")]/@href',
-    ]
 
-    def init_plugin(self, config: dict = None):
+    def init_plugin(self, config: dict):
 
         self.downloadhis = DownloadHistoryOper()
         self.transferhis = TransferHistoryOper()
@@ -383,7 +384,7 @@ class FormatDownPath(_PluginBase):
         torrent_hash = event_data.get("hash")
         downloader = event_data.get("downloader")
         # 获取待处理数据
-        context: Context = event_data.get("context")
+        context: Context = event_data["context"]
         if self.main(downloader=downloader, torrent_hash=torrent_hash, meta=context.meta_info, media_info=context.media_info):
             # 保存已处理数据
             self.update_data(key="processed", value={torrent_hash: downloader})
@@ -426,7 +427,7 @@ class FormatDownPath(_PluginBase):
             """
             from app.db.models.plugindata import PluginData
             # 辅种插件数据
-            assist: list[PluginData] = self.get_data(key=None, plugin_id="IYUUAutoSeed") or []
+            assist: list[PluginData] = self.get_data(plugin_id="IYUUAutoSeed") or []
             # 辅种数据映射表 key: 源种hash, value: 辅种hash列表
             _mapping: dict[str, list[str]] = {}
 
@@ -507,9 +508,9 @@ class FormatDownPath(_PluginBase):
             self.update_data("processed", processed)
             logger.info(f"成功 {_processed_num} 个, 合计 {len(processed)} 个种子已保存至历史")
 
-    def main(self, downloader: str = None, downloadhis: DownloadHistory = None,
-             torrent_hash: str =None, torrent_info: TorrentInfo = None,
-             meta: MetaBase = None, media_info: MediaInfo = None) -> bool:
+    def main(self, downloader: Optional[str] = None, downloadhis: Optional[DownloadHistory] = None,
+             torrent_hash: Optional[str] = None, torrent_info: Optional[TorrentInfo] = None,
+             meta: Optional[MetaBase] = None, media_info: Optional[MediaInfo] = None) -> bool:
         """
         处理单个种子
         :param downloader: 下载器名称
@@ -551,8 +552,6 @@ class FormatDownPath(_PluginBase):
                 success = False
                 logger.info(f"{torrent_info.tags} 命中排除标签：{common_tags}")
                 return True
-            # 备份种子数据
-            self.save_data(key=torrent_info.hash, value=asdict(torrent_info))
             if success and downloadhis:
                 # 使用历史记录的识别信息
                 meta = MetaInfo(title=downloadhis.torrent_name, subtitle=downloadhis.torrent_description)
@@ -574,13 +573,14 @@ class FormatDownPath(_PluginBase):
                 if transfer_history:
                     media_info.title = transfer_history.title
             if success:
-                if self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info):
+                success, can_backup = self.format_torrent_all(torrent_info=torrent_info, meta=meta, media_info=media_info)
+                if can_backup:
+                    # 备份种子数据
+                    self.save_data(key=torrent_info.hash, value=asdict(torrent_info))
                     logger.info(f"种子 {torrent_info.name} 处理完成")
-                    return True
-            # 处理失败
-            return False
+            return success
 
-    def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> bool:
+    def format_torrent_all(self, torrent_info: TorrentInfo, meta: MetaBase, media_info: MediaInfo) -> tuple[bool, bool]:
         _torrent_hash = torrent_info.hash
         _torrent_name = torrent_info.name
         _format_file_path = self._format_movie_path if media_info.type == MediaType.MOVIE else self._format_tv_path
@@ -684,7 +684,7 @@ class FormatDownPath(_PluginBase):
         # 更新数据库
         if need_update:
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
-        return success
+        return success, need_update
 
     def download_subtitle(self, context: Context, torrent_hash: str):
         """
