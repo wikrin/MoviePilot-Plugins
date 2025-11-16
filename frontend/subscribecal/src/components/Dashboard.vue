@@ -218,42 +218,47 @@ onMounted(async () => {
 
 <template>
   <div class="dashboard-widget">
-    <!-- 带边框的卡片 -->
-    <v-card>
-      <v-card-item v-if="config?.attrs?.title">
-        <v-card-title>{{ config?.attrs?.title }}</v-card-title>
-      </v-card-item>
-      <v-card-text>
-        <!-- 加载中状态 -->
-        <div v-if="loading" class="d-flex justify-center align-center py-4">
-          <v-progress-circular indeterminate color="primary"></v-progress-circular>
-        </div>
-        <!-- 时间轴内容 -->
-        <div v-else class="timeline-container px-2">
-          <!-- 横向时间轴 -->
-          <v-timeline
-            direction="horizontal"
-            align="center"
-            line-color="primary"
-            class="dense-timeline"
-          >
-            <v-timeline-item
-              v-for="(group, index) in displayedGroups"
-              :key="group.date"
-              :dot-color="getStatusColor(group)"
-              :size="getTimelineItemSize(group)">
-              <template v-slot:opposite>
-                {{group.date}}
-              </template>
-              <CalendarEvent :events="group" :position="index % 2 === 0 ? 'top' : 'bottom'"/>
-            </v-timeline-item>
-          </v-timeline>
-        </div>
-      </v-card-text>
-      <div class="absolute right-5 top-5">
-        <VIcon class="cursor-move">mdi-drag</VIcon>
-      </div>
-    </v-card>
+    <!-- 使用 v-hover 实现悬停效果 -->
+    <v-hover>
+      <template #default="{ isHovering, props: hoverProps }">
+        <v-card v-bind="hoverProps">
+          <v-card-item v-if="config?.attrs?.title">
+            <v-card-title>{{ config?.attrs?.title }}</v-card-title>
+          </v-card-item>
+          <v-card-text>
+            <!-- 加载中状态 -->
+            <div v-if="loading" class="d-flex justify-center align-center py-4">
+              <v-progress-circular indeterminate color="primary"></v-progress-circular>
+            </div>
+            <!-- 时间轴内容 -->
+            <div v-else class="timeline-container px-2">
+              <!-- 横向时间轴 -->
+              <v-timeline
+                direction="horizontal"
+                align="center"
+                line-color="primary"
+                class="dense-timeline"
+              >
+                <v-timeline-item
+                  v-for="(group, index) in displayedGroups"
+                  :key="group.date"
+                  :dot-color="getStatusColor(group)"
+                  :size="getTimelineItemSize(group)">
+                  <template v-slot:opposite>
+                    {{group.date}}
+                  </template>
+                  <CalendarEvent :events="group" :position="index % 2 === 0 ? 'top' : 'bottom'"/>
+                </v-timeline-item>
+              </v-timeline>
+            </div>
+          </v-card-text>
+          <!-- 只在悬停时显示拖拽图标 -->
+          <div v-show="isHovering" class="absolute right-5 top-5">
+            <v-icon class="cursor-move">mdi-drag</v-icon>
+          </div>
+        </v-card>
+      </template>
+    </v-hover>
   </div>
 </template>
 

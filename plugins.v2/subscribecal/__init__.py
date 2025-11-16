@@ -1,5 +1,4 @@
 # 基础库
-import re
 from dataclasses import dataclass
 import datetime
 import statistics
@@ -71,23 +70,23 @@ class CalendarInfo:
 class CalendarEvent(BaseModel):
     """日历事件"""
     # 创建时间
-    created: Optional[str]
+    created: Optional[str] = None
     # 开始时间
-    dtstart: Optional[str]
+    dtstart: Optional[str] = None
     # 结束时间
-    dtend: Optional[str]
+    dtend: Optional[str] = None
     # 标题
-    summary: Optional[str]
+    summary: Optional[str] = None
     # 描述(备注)
-    description: Optional[str]
+    description: Optional[str] = None
     # 季
-    season: Optional[int]
+    season: Optional[int] = None
     # 集
-    episode: Optional[int]
+    episode: Optional[int] = None
     # 地点
-    location: Optional[str]
+    location: Optional[str] = None
     # 唯一标识
-    uid: Optional[str]
+    uid: Optional[str] = None
     # 类型
     transp: str = "OPAQUE"
     # 序号
@@ -95,7 +94,7 @@ class CalendarEvent(BaseModel):
     # 状态
     status: str = "CONFIRMED"
     # 最后修改时间
-    last_modified: Optional[str]
+    last_modified: Optional[str] = None
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -114,55 +113,56 @@ class CalendarEvent(BaseModel):
             super().__setattr__('last_modified', self._get_utc_time())
 
 
-    def _created_to_ics(self) -> str:
+    def _created_to_ics(self) -> Optional[str]:
         """创建时间"""
         if self.created:
             return f"CREATED;VALUE=DATE-TIME:{self.created}"
 
-    def _dtstart_to_ics(self) -> str:
+    def _dtstart_to_ics(self) -> Optional[str]:
         if self.dtstart:
             return f"DTSTART;VALUE=DATE-TIME:{self.dtstart}"
 
-    def _dtend_to_ics(self) -> str:
+    def _dtend_to_ics(self) -> Optional[str]:
         if self.dtend:
             return f"DTEND;VALUE=DATE-TIME:{self.dtend}"
 
-    def _summary_to_ics(self) -> str:
+    def _summary_to_ics(self) -> Optional[str]:
         """标题"""
         if self.summary:
             return f"SUMMARY:{self.summary}"
 
-    def _description_to_ics(self) -> str:
+    def _description_to_ics(self) -> Optional[str]:
         """备注"""
         if self.description:
             return f"DESCRIPTION:{self.description}"
 
-    def _location_to_ics(self) -> str:
+    def _location_to_ics(self) -> Optional[str]:
         """地点"""
         if self.location:
             return f"LOCATION:{self.location}"
 
-    def _uid_to_ics(self) -> str:
+    def _uid_to_ics(self) -> Optional[str]:
         """唯一标识"""
         return f"UID:{self.uid or uuid.uuid4()}"
 
-    def _transp_to_ics(self) -> str:
+    def _transp_to_ics(self) -> Optional[str]:
         """类型"""
         return f"TRANSP:{self.transp or 'OPAQUE'}"
 
-    def _sequence_to_ics(self) -> str:
+    def _sequence_to_ics(self) -> Optional[str]:
         """序号"""
         return f"SEQUENCE:{self.sequence or 0}"
 
-    def _status_to_ics(self) -> str:
+    def _status_to_ics(self) -> Optional[str]:
         """状态"""
         return f"STATUS:{self.status or 'CONFIRMED'}"
 
-    def _last_modified_to_ics(self) -> str:
+    def _last_modified_to_ics(self) -> Optional[str]:
         """最后修改时间"""
         return f"LAST-MODIFIED:{self.last_modified or self._get_utc_time()}"
 
-    def ics_header(self, calname: str = "追剧日历") -> str:
+    @staticmethod
+    def ics_header(calname: str = "追剧日历") -> str:
         return (
         "\nBEGIN:VCALENDAR\n"
         + "PRODID:-//wikrin//TV broadcast time Calendar 2.0//CN\n"
@@ -203,33 +203,33 @@ class TimeLineItem(BaseModel):
     # 订阅表ID
     id: int
     # 起始时间
-    dtstart: Optional[str]
+    dtstart: Optional[str] = None
     # 结束时间
-    dtend: Optional[str]
+    dtend: Optional[str] = None
     # 标题
-    summary: Optional[str]
+    summary: Optional[str] = None
     # 描述
-    description: Optional[str]
+    description: Optional[str] = None
     # 地点
-    location: Optional[str]
+    location: Optional[str] = None
     # 唯一标识
-    uid: Optional[str]
+    uid: Optional[str] = None
     # 年份
-    year: Optional[str]
+    year: Optional[str] = None
     # 类型
-    type: Optional[str]
+    type: Optional[str] = None
     # 季号
-    season: Optional[int]
+    season: Optional[int] = None
     # 集号
-    episode: Optional[int]
+    episode: Optional[int] = None
     # 海报
-    poster: Optional[str]
+    poster: Optional[str] = None
     # 背景图
-    backdrop: Optional[str]
+    backdrop: Optional[str] = None
     # 评分，float
-    vote: Optional[float]
+    vote: float = 0.0
     # 状态：N-新建 R-订阅中 P-待定 S-暂停
-    state: Optional[str]
+    state: Optional[str] = None
 
 
 class SubscribeCal(_PluginBase):
@@ -240,7 +240,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.2.0"
+    plugin_version = "1.2.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -265,7 +265,7 @@ class SubscribeCal(_PluginBase):
     _interval_minutes: int = 15
     _dashboard_size: int = 6
 
-    def init_plugin(self, config: dict = None):
+    def init_plugin(self, config: dict):
         # 停止现有任务
         self.stop_service()
         self.load_config(config)
@@ -393,22 +393,6 @@ class SubscribeCal(_PluginBase):
     def get_dashboard(self, key: str, **kwargs) -> Optional[Tuple[Dict[str, Any], Dict[str, Any], Optional[List[dict]]]]:
         """
         获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（布局、自动刷新等）；3、仪表板页面元素配置含数据json（vuetify）或 None（vue模式）
-        1、col配置参考：
-        {
-            "cols": 12, "md": 6
-        }
-        2、全局配置参考：
-        {
-            "refresh": 10, // 自动刷新时间，单位秒
-            "border": True, // 是否显示边框，默认True，为False时取消组件边框和边距，由插件自行控制
-            "title": "组件标题", // 组件标题，如有将显示该标题，否则显示插件名称
-            "subtitle": "组件子标题", // 组件子标题，缺省时不展示子标题
-        }
-        3、vuetify模式页面配置使用Vuetify组件拼装，参考：https://vuetifyjs.com/；vue模式为None
-
-        kwargs参数可获取的值：1、user_agent：浏览器UA
-
-        :param key: 仪表盘key，根据指定的key返回相应的仪表盘数据，缺省时返回一个固定的仪表盘数据（兼容旧版）
         """
         return (
             {"cols": self._dashboard_size * 2, "md": self._dashboard_size},
@@ -425,12 +409,12 @@ class SubscribeCal(_PluginBase):
         """
         构建ics日历文本
         """
-        _ics = CalendarEvent().ics_header(self._calname)
+        _ics = CalendarEvent.ics_header(self._calname)
         for uniqueid, event in calevent.items():
             _ics += f"{event.to_ics()}\n"
         return _ics + "END:VCALENDAR"
 
-    def get_ics(self) -> str:
+    def get_ics(self):
         """获取ics内容"""
         _events = self.get_events(self.keys)
         return Response(content=self.generate_ics_content(_events), media_type="text/plain")
@@ -471,7 +455,7 @@ class SubscribeCal(_PluginBase):
     def sub_add_event(self, event: Event):
         if not event or not self._enabled:
             return
-        if sub := SubscribeOper().get(event.event_data.get("subscribe_id", None)):
+        if sub := SubscribeOper().get(event.event_data.get("subscribe_id")):
             _info = self.search_sub(sub=sub, cache=False)
             key = self.media_process(sub, *_info)
             if key is None:
@@ -533,7 +517,7 @@ class SubscribeCal(_PluginBase):
             if not epinfo.air_date: continue
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             # 标题
-            title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title} ({mediainfo.year})" if mediainfo.type == MediaType.TV else f"{mediainfo.title} ({mediainfo.year})"
+            title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title_year}" if mediainfo.type == MediaType.TV else f"{mediainfo.title_year}"
             runtime = epinfo.runtime or valid_runtimes
             # 全天事件
             if minutes is not None:
@@ -547,7 +531,6 @@ class SubscribeCal(_PluginBase):
                 # 0:00 - 23:59
                 dtend = epinfo.utc_airdate(1440 - 1)
             cal.summary=title
-            cal.description=epinfo.overview
             cal.dtstart=epinfo.utc_airdate(minutes)
             cal.dtend=dtend
             cal.season=epinfo.season_number
@@ -613,8 +596,8 @@ class SubscribeCal(_PluginBase):
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
         # 序列化事件数据
         for key, d in value.items():
-            value = {k: v.json() for k, v in d.items()}
-            self.save_data(key=key, value=value)
+            data = {k: v.json() for k, v in d.items()}
+            self.save_data(key=key, value=data)
 
     def get_event_data(self, key: str) -> dict[str, CalendarEvent]:
         """获取日历事件数据"""
@@ -622,7 +605,7 @@ class SubscribeCal(_PluginBase):
         _data = self.get_data(key=key) or {}
         return {k: CalendarEvent.parse_obj(v) for k, v in _data.items()}
 
-    def get_events(self, keys: list[str] = None) -> Optional[Dict[str, CalendarEvent]]:
+    def get_events(self, keys: Optional[list] = None) -> Dict[str, CalendarEvent]:
         events: dict[str, CalendarEvent] = {}
         if not keys:
             self.full_update(cache=True)
@@ -708,12 +691,6 @@ class SubscribeCal(_PluginBase):
                 f"- 密集区间: [{min(best_cluster):.1f}, {max(best_cluster):.1f}]\n"
                 f"- 初步结果: {result:.2f}分钟"
             )
-
-            # 应用取整
-            if self._interval_minutes:
-                orig_result = result
-                result = self.quantize_to_interval(result, self._interval_minutes)
-                logger.info(f"取整: {orig_result:.2f}m → {result:.2f}m (间隔{self._interval_minutes}分钟)")
 
             return result
 
