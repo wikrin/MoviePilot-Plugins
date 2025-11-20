@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 # 项目库
 from app.chain.mediaserver import MediaServerChain
 from app.chain.subscribe import SubscribeChain
+from app.core.config import global_vars
 from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
 from app.db.models.subscribehistory import SubscribeHistory
@@ -33,7 +34,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.1.7"
+    plugin_version = "1.2.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -102,8 +103,7 @@ class FollowUp(_PluginBase):
 
     def schedule_once(self):
         logger.info("续作跟进，立即运行一次")
-        from app.scheduler import Scheduler
-        return asyncio.run_coroutine_threadsafe(self.follow_up(), Scheduler().loop)
+        return asyncio.run_coroutine_threadsafe(self.follow_up(), global_vars.loop)
 
     def __update_config(self):
         """更新设置"""
