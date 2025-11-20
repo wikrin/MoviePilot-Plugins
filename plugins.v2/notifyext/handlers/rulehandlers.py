@@ -77,12 +77,14 @@ class RegexHandler(BaseRuleHandler):
             if not field:
                 continue
 
+            # 匹配成功计数
+            matched_patterns = 0
             raw_value = getattr(message, field, None)
             if not raw_value:
                 continue
 
             text = str(raw_value)
-            logger.debug(f"文本内容: {text}")
+            logger.debug(f"正在处理消息属性 '{field}' 的文本内容: {text}")
             for key, pattern in extractor.items():
                 if key == "field":
                     continue
@@ -90,6 +92,7 @@ class RegexHandler(BaseRuleHandler):
                     match = re.search(pattern, text)
                     logger.debug(f"pattern: `{pattern}` → match: {match}")
                     if match:
+                        matched_patterns += 1
                         if match.groupdict():
                             context.update(match.groupdict())
                         elif match.lastindex == 1:
@@ -98,6 +101,9 @@ class RegexHandler(BaseRuleHandler):
                             context[key] = match.group()
                 except re.error as e:
                     logger.warn(f"正则表达式无效: {pattern}, 错误: {e}")
+            if not matched_patterns:
+                logger.debug(f"消息属性 '{field}' 没有匹配到任何内容, 不符合当前规则")
+                return {}
 
         return context
 

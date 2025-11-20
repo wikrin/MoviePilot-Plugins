@@ -29,7 +29,7 @@ class NotifyExt(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png"
     # 插件版本
-    plugin_version = "2.2.1"
+    plugin_version = "2.3.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -171,7 +171,7 @@ class NotifyExt(_PluginBase):
         return [TemplateConf(**t) for t in templates]
 
     def save_templates(self, templates: list[TemplateConf]):
-        data = [t.dict() for t in templates]
+        data = [t.model_dump() for t in templates]
         self.save_data(key=self._templates_key, value=data)
         # 刷新模板
         self._templates = {t.id: t.template for t in templates}
@@ -181,7 +181,7 @@ class NotifyExt(_PluginBase):
         return [NotificationRule(**rule) for rule in rules]
 
     def save_rules(self, rules: list[NotificationRule]):
-        data = [rule.dict() for rule in rules]
+        data = [rule.model_dump() for rule in rules]
         self.save_data(key=self._rules_key, value=data)
         # 刷新规则
         self._rules = rules
@@ -215,7 +215,7 @@ class NotifyExt(_PluginBase):
         """
         return {"post_message": self.on_post_message}
 
-    def on_post_message(self, message: Notification):
+    def on_post_message(self, message: Notification, *args, **kwargs):
         if getattr(type(self)._local, "flag", False):
             return None
 
@@ -235,7 +235,7 @@ class NotifyExt(_PluginBase):
                 logger.debug(f"{rule.name} 未启用")
                 continue
 
-            if rule.switch and rule.switch != message.mtype.value:
+            if rule.switch and message.mtype and rule.switch != message.mtype.value:
                 logger.debug(f"{rule.name} 场景开关: {rule.switch} 不匹配消息类型 {message.mtype.value}")
                 continue
 

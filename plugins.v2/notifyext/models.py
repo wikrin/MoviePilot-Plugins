@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Optional, List, Dict
 
 from app.schemas.message import Notification
@@ -28,8 +28,7 @@ class FrameHandlerItem(BaseModel):
     # 描述
     description: str = Field(alias='subtitle')
 
-    class Config:
-        allow_population_by_field_name = True
+    model_config = ConfigDict(validate_by_name=True)
 
 
 class TemplateConf(BaseModel):
@@ -80,10 +79,9 @@ class MessageGroup(BaseModel):
     last_time: str
     messages: List[Dict] = []
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def dict(self, *args, **kwargs):
-        d = super().dict(*args, **kwargs)
+        d = super().model_dump(*args, **kwargs)
         d["message"] = self.message.to_dict() if self.message else None
         return d
