@@ -110,6 +110,12 @@ const uniqueEvents = computed<TimeLineItem[]>(() => {
   return result
 })
 
+// 获取图片代理地址
+function getImageUrl(url: string): string {
+  return `api/v1/system/cache/image?url=${encodeURIComponent(url)}`
+}
+
+// 获取图标
 function getIconForEventType(type: string): string {
   switch (type.toLowerCase()) {
     case '电视剧':
@@ -131,7 +137,7 @@ function getIconForEventType(type: string): string {
         class="stacked-image"
         :class="`image-${position}`"
       >
-        <img :src="index === 0 ? event.poster : event.backdrop" />
+        <img :src="getImageUrl(index === 0 ? event.poster : event.backdrop)"/>
       </div>
 
       <!-- 标题 -->
@@ -166,7 +172,7 @@ function getIconForEventType(type: string): string {
                   <VImg
                     height="75"
                     width="50"
-                    :src="event.poster"
+                    :src="getImageUrl(event.poster)"
                     aspect-ratio="2/3"
                     class="object-cover rounded ring-gray-500"
                     cover

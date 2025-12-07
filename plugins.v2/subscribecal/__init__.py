@@ -1,22 +1,19 @@
-# 基础库
-from dataclasses import dataclass
 import datetime
 import statistics
-from typing import Any, Dict, List, Optional, Tuple
 import uuid
+from dataclasses import dataclass
 
-# 第三方库
+from typing import Any, Dict, List, Optional, Tuple
+
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import Response, responses
 from pydantic import BaseModel
 import pytz
 
-# 项目库
 from app.chain.subscribe import Subscribe
-from app.core.cache import Cache
+from app.core.cache import Cache, fresh
 from app.core.config import settings
-from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
 from app.db.downloadhistory_oper import DownloadHistoryOper
 from app.db.subscribe_oper import SubscribeOper
@@ -240,7 +237,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.2.1"
+    plugin_version = "1.2.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -439,7 +436,7 @@ class SubscribeCal(_PluginBase):
             if sub.best_version: continue
             _info = self.search_sub(sub=sub, cache=cache)
             if not _info: continue
-            key = self.media_process(sub, *_info)
+            key = self.media_process(sub, _info)
             if key is None:
                 continue
             _tmp_keys.append(key)
@@ -457,7 +454,7 @@ class SubscribeCal(_PluginBase):
             return
         if sub := SubscribeOper().get(event.event_data.get("subscribe_id")):
             _info = self.search_sub(sub=sub, cache=False)
-            key = self.media_process(sub, *_info)
+            key = self.media_process(sub, _info)
             if key is None:
                 return
 
@@ -465,46 +462,43 @@ class SubscribeCal(_PluginBase):
             # 保存数据
             self.save_keys(self.keys)
 
-    def search_sub(self, sub: Subscribe, cache: bool = True) -> Optional[Tuple[MediaInfo, List[CalendarInfo]]]:
+    def search_sub(self, sub: Subscribe, cache: bool = True) -> Optional[List[CalendarInfo]]:
         """搜索订阅"""
         cache_params = {"key": self.get_sub_key(sub), "region": self._search_sub_region}
-        mediainfo = self.chain.recognize_media(tmdbid=sub.tmdbid, doubanid=sub.doubanid, bangumiid=sub.bangumiid,
-                                                episode_group=sub.episode_group, mtype=MediaType(sub.type), cache=cache)
         info = None
         if cache and result_cache and result_cache.exists(**cache_params):
             info = result_cache.get(**cache_params)
-            logger.info(f"{sub.name}({sub.year}) 使用缓存数据")
-        elif sub.type == MediaType.TV.value:
-            if sub.episode_group:
-                if result := TmdbApi().get_tv_group_detail(group_id=sub.episode_group, season=sub.season):
-                    list(map(lambda x: x.update(season_number=sub.season), result.get('episodes', [])))
-            else:
-                result = self.chain.tmdb_info(tmdbid=sub.tmdbid, mtype=MediaType(sub.type), season=sub.season)
-            # 电视剧补充info集信息
-            info = [CalendarInfo(**epinfo) for epinfo in result.get('episodes', [])]
+            logger.info(f"{sub.name} ({sub.year}) 使用缓存数据")
         else:
-            info = [CalendarInfo(**mediainfo.tmdb_info)]
+            with fresh(not cache):
+                if sub.episode_group and (result := TmdbApi().get_tv_group_detail(group_id=sub.episode_group, season=sub.season)):
+                    # 将剧集组中季号更新为当前季
+                    list(map(lambda x: x.update(season_number=sub.season), result.get('episodes', [])))
+                else:
+                    result = self.chain.tmdb_info(tmdbid=sub.tmdbid, mtype=MediaType(sub.type), season=sub.season)
+            if result:
+                info = [CalendarInfo(**info) for info in result.get('episodes', [result])]
         if info:
             result_cache.set(value=info, **cache_params)
-            logger.debug(f"{sub.name}({sub.year}) 已缓存")
+            logger.debug(f"{sub.name} ({sub.year}) 已缓存")
         else:
-            logger.warn(f"{sub.name}({sub.year}) 获取信息失败")
-        return mediainfo, info
+            logger.warn(f"{sub.name} ({sub.year}) 获取信息失败")
+        return info
 
-    def media_process(self, sub: Subscribe, mediainfo: MediaInfo, cal_info: list[CalendarInfo]) -> Optional[str]:
+    def media_process(self, sub: Subscribe, cal_info: list[CalendarInfo]) -> Optional[str]:
         """
         :param: Subscribe对象
         :param cal_info: TMDB剧集播出时间
         :return: key, List[CalendarEvent]
         """
-        if not mediainfo or not cal_info:
+        if not cal_info:
             return
-
+        title_year = f"{sub.name} ({sub.year})"
         _key = self.get_sub_key(sub)
         # 剧集播出时间
         minutes = (
             self.generate_average_time(sub, cal_info)
-            if self._calc_time and mediainfo.type == MediaType.TV
+            if self._calc_time and sub.type == MediaType.TV.value
             else None
         )
         # 剧集时长
@@ -517,7 +511,7 @@ class SubscribeCal(_PluginBase):
             if not epinfo.air_date: continue
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             # 标题
-            title = f"[{epinfo.episode_number}/{total_episodes}]{mediainfo.title_year}" if mediainfo.type == MediaType.TV else f"{mediainfo.title_year}"
+            title = f"[{epinfo.episode_number}/{total_episodes}]{title_year}" if sub.type == MediaType.TV.value else f"{title_year}"
             runtime = epinfo.runtime or valid_runtimes
             # 全天事件
             if minutes is not None:
@@ -538,7 +532,7 @@ class SubscribeCal(_PluginBase):
             event_data[str(epinfo.id)] = cal
         # 保存事件数据
         self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
-        logger.info(f"{mediainfo.title_year} 日历事件处理完成")
+        logger.info(f"{title_year} 日历事件处理完成")
         return _key
 
     def get_grouped_events(self, before_days: int = 3, after_days: int = 3) -> list[TimeLineItem]:

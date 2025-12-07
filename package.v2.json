@@ -38,11 +38,12 @@
       "name": "订阅日历",
       "description": "根据订阅生成日历, 以供导入至设备日历中",
       "labels": "工具, 订阅",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "1.2.2": "仪表盘组件支持`全局图片缓存`，修复了信息获取失败时导致的异常",
         "1.2.1": "优化仪表盘组件拖拽图标",
         "1.2.0": "优化竖向时间线样式, 修复日期错误分组 (显示异常重新运行一次插件或重置)",
         "1.1.2": "错误修复",
