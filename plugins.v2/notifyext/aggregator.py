@@ -1,11 +1,13 @@
 import re
 from typing import Dict, Optional, TYPE_CHECKING
 
+from app.core.cache import FileCache
+
 from app.log import logger
 from app.plugins.notifyext.models import AggregateConf, MessageGroup, NotificationRule
 from app.scheduler import Scheduler, BackgroundScheduler
 from app.schemas.message import Notification
-from app.utils.singleton import SingletonClass
+from app.utils.singleton import Singleton
 
 from .utils import TimeUtils
 
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
     from . import NotifyExt
 
 
-class MessageAggregator(metaclass=SingletonClass):
+class MessageAggregator(metaclass=Singleton):
     """消息聚合器"""
 
     def __init__(self, plugin: "NotifyExt"):
@@ -31,7 +33,7 @@ class MessageAggregator(metaclass=SingletonClass):
         exclude_pattern = aggregate.exclude
         include_pattern = aggregate.include
 
-        if not exclude_pattern and not include_pattern and aggregate.wait_time <= 0:
+        if not include_pattern and not aggregate.wait_time:
             return False
 
         # 收集有效的字符串属性值
@@ -110,15 +112,10 @@ class MessageAggregator(metaclass=SingletonClass):
             self._save_state()
 
     def _save_state(self):
-        state = {k: v.dict() for k, v in self._messages.items()}
-        self.plugin.save_data("aggregate_state", state)
+        FileCache().set(key=self.__class__.__name__, value=self._messages, region="aggregate_state")
 
     def _restore_state(self):
-        state = self.plugin.get_data("aggregate_state") or {}
-        if not state:
-            return
-        for rule_id, group_data in state.items():
-            self._messages[rule_id] = MessageGroup(**group_data)
+        self._messages = FileCache().get(key=self.__class__.__name__, region="aggregate_state") or {}
         if not self._messages:
             return
         now = TimeUtils.now()
@@ -169,7 +166,6 @@ class MessageAggregator(metaclass=SingletonClass):
         if not self._messages:
             return
         self._save_state()
-        self._remove_job()
 
     @property
     def _scheduler(self) -> Optional[BackgroundScheduler]:

@@ -77,9 +77,9 @@ class MediaServerMsgHandler(BaseFrameHandler):
         """
         :label 新入库
         """
-        events = {'library.new'}
+        events = {'library.new', "ItemAdded"}
 
-        return cls.send(valid_events=events)
+        return cls.send(events=events)
 
     @registry.register
     def playback_start(cls) -> dict:
