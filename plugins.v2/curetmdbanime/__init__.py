@@ -268,7 +268,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -505,6 +505,13 @@ class CureTMDbAnime(_PluginBase):
         if not meta or not mediainfo:
             return False
 
+        # 检查识别词是否已偏移集数
+        if meta.apply_words:
+            matched_word = next((word for word in meta.apply_words if " >> " in word and " <> " in word), None)
+            if matched_word:
+                logger.info(f"存在应用的集数偏移识别词 `{matched_word}`, 跳过调整元数据")
+                return False
+
         episodes_map: dict[tuple, tuple[int, int]] = self.cache.org_map(mediainfo.tmdb_id)
         corrected = False
 
@@ -528,6 +535,15 @@ class CureTMDbAnime(_PluginBase):
                     meta.end_season = logical_season if meta.end_season else None
                     meta.end_episode = logical_episode
                 return True
+
+            # TMDB 信息未更新时
+            elif (
+                mediainfo.number_of_episodes
+                and season_num == mediainfo.number_of_seasons
+                and len(mediainfo.seasons.get(season_num, [])) < episode_num
+            ):
+                logger.debug(f"{mediainfo.title_year} TMDb集数信息可能未更新, 不调整元数据")
+                return False
 
             # 发布组使用连续集号, TMDB分季时
             elif (
