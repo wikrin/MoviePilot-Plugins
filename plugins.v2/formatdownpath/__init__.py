@@ -1,4 +1,3 @@
-# 基础库
 import re
 import shutil
 import threading
@@ -7,12 +6,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Union
 
-# 第三方库
 from apscheduler.triggers.cron import CronTrigger
 from lxml import etree
 from sqlalchemy.orm import Session
 
-# 项目库
 from app.core.config import settings
 from app.core.context import MediaInfo, Context
 from app.core.event import eventmanager, Event
@@ -233,7 +230,7 @@ class FormatDownPath(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png"
     # 插件版本
-    plugin_version = "1.3.2"
+    plugin_version = "1.3.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -407,7 +404,8 @@ class FormatDownPath(_PluginBase):
             self.delete_data(key="processed", torrent_hash=torrent_hash)
             if delete_file:
                 logger.warn(f"清理种子: {torrent_hash} 相关下载记录")
-                self.purge_download_records(*self.fetch_data(torrent_hash))
+                # 只清理标记为已删除的文件记录
+                self.purge_download_records(*self.fetch_data(torrent_hash=torrent_hash, state=0))
 
     def cron_process_main(self):
         """
@@ -425,9 +423,8 @@ class FormatDownPath(_PluginBase):
             """
             生成源种子hash表
             """
-            from app.db.models.plugindata import PluginData
             # 辅种插件数据
-            assist: list[PluginData] = self.get_data(plugin_id="IYUUAutoSeed") or []
+            assist = self.get_data(plugin_id="IYUUAutoSeed") or []
             # 辅种数据映射表 key: 源种hash, value: 辅种hash列表
             _mapping: dict[str, list[str]] = {}
 
@@ -888,7 +885,7 @@ class FormatDownPath(_PluginBase):
         if data:
             return {"name": data.get('name'), "files_count": len(data.get('files')), "save_path": data.get('save_path')}
 
-    def fetch_data(self, torrent_hash: str) -> tuple[dict[int, dict], dict[int, dict]]:
+    def fetch_data(self, torrent_hash: str, state: Optional[int] = None) -> tuple[dict[int, dict], dict[int, dict]]:
         """
         使用哈希查询数据库中的下载记录和文件记录
         """
@@ -897,7 +894,19 @@ class FormatDownPath(_PluginBase):
         his = {download_history.id: {"path": download_history.path}} if download_history else {}
         # 查询文件下载记录
         download_files: list[DownloadFiles] = self.downloadhis.get_files_by_hash(download_hash=torrent_hash)
-        downfiles = {file.id: {"fullpath": file.fullpath, "savepath": file.savepath, "filepath": file.filepath} for file in download_files} if download_files else {}
+        downfiles = (
+            {
+                file.id: {
+                    "fullpath": file.fullpath,
+                    "savepath": file.savepath,
+                    "filepath": file.filepath,
+                }
+                for file in download_files
+                if state is None or file.state == state
+            }
+            if download_files
+            else {}
+        )
         return his, downfiles
 
     def set_downloader(self, downloader: str):
@@ -1031,4 +1040,3 @@ class FormatDownPath(_PluginBase):
         db.query(DownloadHistory).filter(
             DownloadHistory.download_hash == torrent_hash \
                 and DownloadHistory.id == db_id).update(payload)
-
