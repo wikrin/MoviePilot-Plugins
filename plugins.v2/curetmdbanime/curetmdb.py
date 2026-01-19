@@ -56,7 +56,6 @@ class CureTMDb:
     def season_info(self, tmdbid: int) -> dict:
         """
         从本地 JSON 加载季信息
-        :return: dict
         """
         if not self.path.exists():
             logger.warning("信息文件不存在")

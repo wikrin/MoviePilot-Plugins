@@ -64,6 +64,12 @@ class SeasonEntry(BaseModel):
     # 包含
     include: Optional[List[IncludeEntry]] = None
 
+    def episode_count_valid(self, seasons: dict) -> bool:
+        """
+        该季的实际集数是否在允许范围内
+        """
+        return len(seasons.get(self.season_number, [])) <= self.episode_count
+
     @property
     def _included_orders(self) -> set:
         """返回包含的集号集合（order）"""
@@ -117,6 +123,15 @@ class SeriesEntry(BaseModel):
     def season(self, num: int) -> Optional[SeasonEntry]:
         """根据季号查找对应的 SeasonEntry 对象"""
         return next((s for s in self.seasons if s.season_number == num), None)
+
+    def has_inconsistent(self, seasons: dict) -> bool:
+        """
+        验证一致性
+        """
+        return not all(
+            season.episode_count_valid(seasons)
+            for season in self.seasons
+        )
 
     @property
     def season_names(self) -> Dict[int, str]:

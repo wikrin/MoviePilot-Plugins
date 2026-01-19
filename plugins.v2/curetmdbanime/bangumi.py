@@ -69,9 +69,7 @@ class BangumiAPIClient:
                     "air_date": [f">={start_date}", f"<={end_date}"]
                 },
             }
-        if result := self.__invoke("post", self._urls["search"], json=json):
-            return result.get("data") or []
-        return []
+        return self.__invoke("post", self._urls["search"], key="data", json=json) or []
 
     def detail(self, bid: int) -> Optional[dict]:
         """
@@ -95,8 +93,9 @@ class BangumiAPIClient:
     def get_all_sequels(self, bid: int) -> list[int]:
         """
         递归获取指定 Bangumi 条目及其所有续集条目
+
         :param bid: 初始 Bangumi ID
-        :return: 包含所有续集的ids列表
+        :return list: 包含所有续集的ids列表
         """
         result = []
 
@@ -156,7 +155,7 @@ class BangumiAPIClient:
         获取 Bangumi 条目中的 sort 和 ep 值。
 
         :param sid: Bangumi 条目 ID
-        :return: (sort, ep) 元组，若失败则返回 None
+        :return (sort, ep): 元组，若失败则返回 None
         """
         if not (result := self.episodes(sid)):
             return None

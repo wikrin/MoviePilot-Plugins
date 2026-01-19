@@ -1,7 +1,6 @@
 # 基础库
 import contextvars
 from contextlib import contextmanager
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List, Tuple
 
@@ -49,10 +48,11 @@ class SeasonCache:
         """
         根据逻辑季信息解析出原始季号和集号。
         如果没有逻辑季，则尝试获取第一个 tv 类型的原始季号。
+
         :param tmdbid: 媒体 TMDB ID
         :param season: 用户提供的季号
         :param episode: 用户提供的集号（可选）
-        :return: (original_season, original_episode, seasoninfo)
+        :return tuple: (original_season, original_episode, seasoninfo)
         """
         if season is None:
             return (season, episode, {})
@@ -79,6 +79,7 @@ class SeasonCache:
     def org_map(self, tmdbid: int) -> Dict[tuple, tuple[int, int]]:
         """
         获取原始季映射关系
+
         :param tmdbid: 媒体 TMDB ID
         """
         return logic.org_map(self.use_cont_eps) if (logic := self.get(tmdbid)) else {}
@@ -107,10 +108,10 @@ class SeasonSplitter:
         season_count = mediainfo.number_of_seasons
 
         def air_date(season: Optional[int] = None) -> Optional[str]:
-                if season is None:
-                    air_date = mediainfo.release_date
-                else:
-                    air_date = next(
+            if season is None:
+                air_date = mediainfo.release_date
+            else:
+                air_date = next(
                         (
                             info.get("air_date")
                             for info in mediainfo.season_info
@@ -118,7 +119,7 @@ class SeasonSplitter:
                         ),
                         mediainfo.release_date,
                     )
-                return air_date
+            return air_date
 
         def ctmdb_derive() -> Optional[SeriesEntry]:
             if result := self.curetmdb.season_info(mediainfo.tmdb_id):
@@ -132,7 +133,7 @@ class SeasonSplitter:
                 # 如果未找到季信息且媒体信息显示有2季
                 if season_count == 2:
                     # 查找Bangumi条目并验证是否符合合并条件
-                    item = self._search_subjects(mediainfo.original_title, air_date(2))
+                    item = self._search_subjects(mediainfo.original_title, air_date(season_count))
                     result = item and self.bgm.get_sort_and_ep(item["id"])
                     if result and result[0] == result[1]:
                         return None
@@ -141,7 +142,7 @@ class SeasonSplitter:
                 return self.bgm.season_info(item)
 
         seasons = ctmdb_derive() or bangumi_derive()
-        if seasons and seasons.max_season != mediainfo.number_of_seasons:
+        if seasons and seasons.has_inconsistent(mediainfo.seasons):
             return self._logic_seasons(mediainfo, seasons)
 
     def _search_subjects(self, title: str, air_date: Optional[int] = None) -> Optional[dict]:
@@ -152,15 +153,9 @@ class SeasonSplitter:
             logger.error(f"Bangumi search error: {e}")
 
     def _logic_seasons(self, mediainfo: MediaInfo, series: SeriesEntry) -> LogicSeries:
-        seasons: list[LogicSeason] = []
         logic_series = LogicSeries(name=series.name)
 
         def append(name: str, mapping: dict[int, EpisodeMap]):
-            if logic_series.has_season(current_season) and self.is_date_diff_within(
-                air_date, logic_series.season_info(current_season).air_date
-            ):
-                logger.info(f"忽略重复的季: {current_season}: 已存在总集数: {seasons[current_season].episode_count}, 新的总集数: {len(mapping)}")
-                return  # 保留集数多的
             name = name or tmdb_season.get("name")
 
             logger.info(f"{mediainfo.tmdb_id} {mediainfo.title_year}: {name}, 集数: {len(mapping)}")
@@ -183,6 +178,9 @@ class SeasonSplitter:
                     tmdb_seasons.append(tmdb_season)
         if not tmdb_seasons:
             return None
+        if mediainfo.number_of_seasons >= 2:
+            # 存在多季时, 检查并删除重复的集
+            tmdb_seasons = self.remove_duplicate_episodes(tmdb_seasons)
         try:
             last_episode = tmdb_seasons[-1]["episodes"][-1]["id"]
         except(IndexError, KeyError):
@@ -225,6 +223,69 @@ class SeasonSplitter:
 
         return logic_series
 
+    @staticmethod
+    def remove_duplicate_episodes(seasons: List[dict]):
+        """
+        根据播出日期去重，保留数据最完整的集，并保持原有顺序
+
+        :param seasons: 包含多个季度信息的列表，每个季度包含episodes列表
+        :return List[dict]: 去重后的季度列表
+        """
+
+        def completeness_score(episode: dict) -> int:
+            """计算集的完整性评分"""
+            score = 0
+            if episode.get("name"):
+                score += 10
+            if episode.get("overview"):
+                score += 8
+            if episode.get("still_path"):
+                score += 5
+            if episode.get("vote_average"):
+                score += 3
+            score += sum(1 for v in episode.values() if v is not None)
+            return score
+
+        # 按播出日期分组：{air_date: {season_idx: [ep_idx, ...]}}
+        episodes_by_date: dict[str, dict[int, list[int]]] = {}
+        episodes_to_remove = set()
+
+        # 构建索引
+        for season_idx, season in enumerate(seasons):
+            episodes_list = season.get("episodes", [])
+            for ep_idx, episode in enumerate(episodes_list):
+                air_date = episode.get("air_date")
+                if not air_date:
+                    continue
+
+                if air_date not in episodes_by_date:
+                    episodes_by_date[air_date] = {}
+
+                if season_idx not in episodes_by_date[air_date]:
+                    # 发现相同播出日期的不同季
+                    if episodes_by_date[air_date]:
+                        # 比较并保留完整性最高的集
+                        for existing_season_idx, existing_ep_indices in episodes_by_date[air_date].items():
+                            existing_ep_idx = existing_ep_indices.pop(0)
+                            existing_episode = seasons[existing_season_idx]["episodes"][existing_ep_idx]
+
+                            if completeness_score(episode) > completeness_score(existing_episode):
+                                # 新集更完整，替换旧集
+                                seasons[existing_season_idx]["episodes"][existing_ep_idx] = episode
+                            # 标记新集移除
+                            episodes_to_remove.add(ep_idx)
+
+                    episodes_by_date[air_date][season_idx] = []
+
+                episodes_by_date[air_date][season_idx].append(ep_idx)
+
+            # 删除重复的集（从后向前删除以保持索引有效性）
+            for ep_idx in sorted(list(episodes_to_remove), reverse=True):
+                season["episodes"].pop(ep_idx)
+
+        # 过滤掉没有episodes的季
+        return [s for s in seasons if s and s.get("episodes")]
+
     def clear(self):
         """清理缓存"""
         self.curetmdb.clear()
@@ -232,26 +293,6 @@ class SeasonSplitter:
 
     def close(self):
         self.bgm.close()
-
-    @staticmethod
-    def is_date_diff_within(date_str1: str, date_str2: str, days_range: int = 3) -> bool:
-        """
-        判断两个日期字符串之间的差是否在指定天数范围内。
-
-        :param date_str1: 第一个日期字符串，格式应为 "YYYY-MM-DD"
-        :param date_str2: 第二个日期字符串，格式应为 "YYYY-MM-DD"
-        :param days_range: 指定的天数范围（绝对值比较）
-        :return: 如果时间差小于等于 days_range 天，则返回 True，否则返回 False
-        """
-        try:
-            date1 = datetime.strptime(date_str1, "%Y-%m-%d")
-            date2 = datetime.strptime(date_str2, "%Y-%m-%d")
-            diff = abs((date2 - date1).days)
-            return diff <= days_range
-        except (ValueError, TypeError) as e:
-            # 日期格式错误或无法解析
-            logger.error(f"日期格式错误: {e}")
-            return False
 
     @property
     def services(self) -> bool:
@@ -268,7 +309,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "1.3.3"
+    plugin_version = "1.4.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -639,10 +680,11 @@ class CureTMDbAnime(_PluginBase):
     def on_tmdb_info(self, tmdbid: int, mtype: MediaType, season: Optional[int] = None) -> Optional[dict]:
         """
         获取 TMDB 信息（支持电影/电视剧），并整合季/集信息。
+
         :param tmdbid: TMDB ID
         :param mtype: 媒体类型（MediaType.MOVIE / MediaType.TV）
         :param season: 季号（仅限电视剧）
-        :return: 合并后的 TMDB 数据字典 或 None
+        :return dict: 合并后的 TMDB 数据字典 或 None
         """
 
         if not self.is_eligible(tmdbid, mtype):
@@ -734,6 +776,7 @@ class CureTMDbAnime(_PluginBase):
     def on_tmdb_episodes(self, tmdbid: int, season: int, episode_group: Optional[str] = None) -> Optional[Tuple[schemas.TmdbEpisode]]:
         """
         根据TMDBID查询某季的所有集信息
+
         :param tmdbid:  TMDBID
         :param season:  季
         :param episode_group:  剧集组
@@ -750,6 +793,7 @@ class CureTMDbAnime(_PluginBase):
                      season: Optional[int] = None, episode: Optional[int] = None) -> Optional[str]:
         """
         获取NFO文件内容文本
+
         :param meta: 元数据
         :param mediainfo: 媒体信息
         :param season: 季号
@@ -787,6 +831,7 @@ class CureTMDbAnime(_PluginBase):
                          episode: Optional[int] = None) -> Optional[dict]:
         """
         获取图片名称和url
+
         :param mediainfo: 媒体信息
         :param season: 季号
         :param episode: 集号
@@ -855,9 +900,9 @@ class CureTMDbAnime(_PluginBase):
     def on_transfer(self, meta: MetaBase, mediainfo: MediaInfo, **kwargs):
         """
         文件整理
+
         :param meta: 预识别的元数据
         :param mediainfo:  识别的媒体信息
-        :return: None
         """
         if mediainfo.type != MediaType.TV:
             return None
