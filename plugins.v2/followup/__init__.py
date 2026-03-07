@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 
 # 第三方库
 from apscheduler.triggers.cron import CronTrigger
+from pydantic import BaseModel, Field
 from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
@@ -16,7 +17,6 @@ from app.core.config import global_vars
 from app.core.context import MediaInfo
 from app.core.event import eventmanager, Event
 from app.db.models.subscribehistory import SubscribeHistory
-from app.db.site_oper import SiteOper
 from app.db.subscribe_oper import SubscribeOper
 from app.db import db_query
 from app.helper.service import ServiceConfigHelper
@@ -24,6 +24,24 @@ from app.log import logger
 from app.modules.themoviedb.tmdbapi import TmdbApi
 from app.plugins import _PluginBase
 from app.schemas.types import EventType, MediaType, NotificationType
+
+
+class FollowUpConfig(BaseModel):
+    """续作跟进插件配置"""
+    # 插件开关
+    enabled: bool = False
+    # 提前提醒天数
+    after_days: int = Field(default=2, ge=1, le=30)
+    # 系列检查年限
+    threshold_years: int = Field(default=15, ge=2, le=50)
+    # cron 表达式
+    cron: str = ""
+    # 单次运行开关
+    onlyonce: bool = False
+    # 检查订阅历史
+    check_sub_history: bool = True
+    # 媒体库
+    libraries: List[str] = []
 
 
 class FollowUp(_PluginBase):
@@ -34,7 +52,7 @@ class FollowUp(_PluginBase):
     # 插件图标
     plugin_icon = ""
     # 插件版本
-    plugin_version = "1.2.0"
+    plugin_version = "1.2.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -51,28 +69,8 @@ class FollowUp(_PluginBase):
     _request_lock = asyncio.Lock()
     _min_interval = 0.025
 
-    # 配置属性
-    _enabled: bool = False
-    _after_days: int = 2
-    _threshold_years: int = 15
-    _cron: str = ""
-    _onlyonce: bool = False
-    _check_sub_history: bool = True
-    _libraries: list = []
-    _save_path: str = ""
-    _sites: list = []
-
-    CONFIG_KEYS = (
-        "enabled",
-        "after_days",
-        "threshold_years",
-        "cron",
-        "onlyonce",
-        "check_sub_history",
-        "libraries",
-        "save_path",
-        "sites",
-    )
+    # 配置
+    config: Optional[FollowUpConfig] = None
 
     def init_plugin(self, config: dict = None):
 
@@ -82,32 +80,23 @@ class FollowUp(_PluginBase):
 
         self.tmdbapi = TmdbApi()
 
-        if self._onlyonce:
+        if self.config.onlyonce:
             self.schedule_once()
             # 关闭一次性开关
-            self._onlyonce = False
+            self.config.onlyonce = False
             self.__update_config()
 
     def load_config(self, config: dict):
         """加载配置"""
-        if config:
-            # 遍历配置中的键并设置相应的属性
-            for key in self.CONFIG_KEYS:
-                setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
-            # 获得所有站点
-            site_ids = {site.id for site in SiteOper().list_order_by_pri()}
-            # 过滤已删除的站点
-            self._sites = [site_id for site_id in self._sites if site_id in site_ids]
-            # 更新配置
-            self.__update_config()
+        self.config = FollowUpConfig(**config) if config else FollowUpConfig()
 
     def schedule_once(self):
         logger.info("续作跟进，立即运行一次")
         return asyncio.run_coroutine_threadsafe(self.follow_up(), global_vars.loop)
 
     def __update_config(self):
-        """更新设置"""
-        self.update_config({key: getattr(self, f"_{key}") for key in self.CONFIG_KEYS})
+        """更新配置"""
+        self.update_config(self.config.model_dump())
 
     def get_form(self):
         # 获取所有启用的媒体服务器及其库信息
@@ -117,12 +106,6 @@ class FollowUp(_PluginBase):
             for mediaserver in mediaservers
             if mediaserver and mediaserver.enabled
             for library in (MediaServerChain().librarys(mediaserver.name) or [])
-        ]
-
-        # 列出所有站点
-        sites_options = [
-            {"title": site.name, "value": site.id}
-            for site in SiteOper().list_order_by_pri()
         ]
 
         return [
@@ -251,42 +234,6 @@ class FollowUp(_PluginBase):
                             },
                         ],
                     },
-                    {
-                        'component': 'VRow',
-                        'content': [
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VTextField',
-                                        'props': {
-                                            'model': 'save_path',
-                                            'label': '保存目录',
-                                            'placeholder': '留空自动',
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                'component': 'VCol',
-                                'props': {'cols': 12, 'md': 6},
-                                'content': [
-                                    {
-                                        'component': 'VSelect',
-                                        'props': {
-                                            'model': 'sites',
-                                            'label': '选择站点',
-                                            'chips': True,
-                                            'multiple': True,
-                                            'clearable': True,
-                                            'items': sites_options,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
                 ],
             },
         ], {
@@ -297,17 +244,15 @@ class FollowUp(_PluginBase):
             "onlyonce": False,
             "check_sub_history": True,
             "libraries": [],
-            "save_path": "",
-            "sites": [],
         }
 
     def get_service(self) -> List[Dict[str, Any]]:
         """
         注册插件公共服务
         """
-        if self._enabled:
-            trigger = CronTrigger.from_crontab(self._cron) if self._cron else "interval"
-            kwargs = {"hours": 24} if not self._cron else {}
+        if self.config.enabled:
+            trigger = CronTrigger.from_crontab(self.config.cron) if self.config.cron else "interval"
+            kwargs = {"hours": 24} if not self.config.cron else {}
             return [
                 {
                     "id": "FollowUp",
@@ -341,7 +286,7 @@ class FollowUp(_PluginBase):
         pass
 
     def get_state(self):
-        return self._enabled
+        return self.config.enabled
 
     @eventmanager.register(EventType.PluginAction)
     def action_event_handler(self, event: Event):
@@ -446,8 +391,8 @@ class FollowUp(_PluginBase):
             # 电视剧或非系列电影检查年限
             if not min_info.get("belongs_to_collection"):
                 air_date = min_info.get("last_air_date") or min_info.get("release_date")
-                if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
-                    logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self._threshold_years} 年，不再跟进")
+                if air_date and not self.is_date_in_range(air_date, datetime.now(), 365 * self.config.threshold_years):
+                    logger.info(f"{key} {min_info['title_year']} 已超过设定年限: {self.config.threshold_years} 年，不再跟进")
                     _ignore.add(key)
                     self.update_ignore_keys(key)
                     continue
@@ -455,7 +400,7 @@ class FollowUp(_PluginBase):
             # 检查具体更新
             if min_info["type"] == MediaType.TV:
                 next_episode = min_info.get("next_episode_to_air")
-                if next_episode and self.is_date_in_range(next_episode.get("air_date"), threshold_days=self._after_days):
+                if next_episode and self.is_date_in_range(next_episode.get("air_date"), threshold_days=self.config.after_days):
                     items_for_full_recognition.append(key)
 
             elif min_info["type"] == MediaType.MOVIE:
@@ -546,7 +491,7 @@ class FollowUp(_PluginBase):
                 followinfo["follow_up"] = False
 
             if latest_air_date and not self.is_date_in_range(
-                latest_air_date, threshold_days=self._after_days
+                latest_air_date, threshold_days=self.config.after_days
             ):
                 logger.info(
                     f"{followinfo.get('name') or collection_id} 没有新的系列电影上映")
@@ -563,7 +508,7 @@ class FollowUp(_PluginBase):
                 next_air_date = None
 
             # 判断是否符合提醒时间
-            if next_air_date is None or not self.is_date_in_range(next_air_date, threshold_days=self._after_days):
+            if next_air_date is None or not self.is_date_in_range(next_air_date, threshold_days=self.config.after_days):
                 logger.info(
                     f"{latest_part.title} 非院线发行日期: {next_air_date if next_air_date else '暂无'}，不符合提醒条件")
                 continue
@@ -591,8 +536,8 @@ class FollowUp(_PluginBase):
     def _should_track_media(self, mediainfo: MediaInfo) -> bool:
         """判断是否在跟进时间范围内"""
         air_date = mediainfo.last_air_date or mediainfo.release_date
-        if not air_date or not self.is_date_in_range(air_date, datetime.now(), 365 * self._threshold_years):
-            logger.info(f"{mediainfo.title_year} 已超过设定年限: {self._threshold_years} 年，不再跟进")
+        if not air_date or not self.is_date_in_range(air_date, datetime.now(), 365 * self.config.threshold_years):
+            logger.info(f"{mediainfo.title_year} 已超过设定年限: {self.config.threshold_years} 年，不再跟进")
             return False
 
         return True
@@ -635,7 +580,7 @@ class FollowUp(_PluginBase):
 
         # 媒体服务器
         serveritems = self.get_media_server_items(exclude=excluded_items)
-        subscribehis = {(sub.type, sub.tmdbid) for sub in self.get_subscribe_history(exclude=excluded_items)} if self._check_sub_history else set()
+        subscribehis = {(sub.type, sub.tmdbid) for sub in self.get_subscribe_history(exclude=excluded_items)} if self.config.check_sub_history else set()
         return serveritems.union(subscribehis)
 
     @eventmanager.register(EventType.MessageAction)
@@ -674,7 +619,7 @@ class FollowUp(_PluginBase):
         if not data:
             msg, buttons = "信息已过时", None
         else:
-            sid, msg = SubscribeChain().add(**data, save_path=self._save_path, sites=self._sites, username=self.plugin_name)
+            sid, msg = SubscribeChain().add(**data, username=self.plugin_name)
             if sid:
                 self.del_data(_key)
                 self.chain.delete_message(channel, source, original_message_id, original_chat_id)
@@ -719,7 +664,7 @@ class FollowUp(_PluginBase):
             if not libraries:
                 continue
             for library in libraries:
-                if library.id not in self._libraries:
+                if library.id not in self.config.libraries:
                     continue
                 logger.info(f"正在获取 {server_name} 媒体库 {library.name} ...")
 
@@ -753,16 +698,6 @@ class FollowUp(_PluginBase):
             "season": season,
             "start_episode": total_episode + 1 if total_episode else 0,
             }
-
-    @eventmanager.register(EventType.SiteDeleted)
-    def site_deleted(self, event: Event):
-        """
-        删除对应站点
-        """
-        site_id = event.event_data.get("site_id")
-        if site_id in self._sites:
-            self._sites.remove(site_id)
-            self.__update_config()
 
     def get_ignore_keys(self) -> set[tuple[str, int]]:
         _keys = self.get_data("ignore_keys") or []
