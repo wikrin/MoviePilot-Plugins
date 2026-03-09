@@ -1,15 +1,8 @@
 import contextvars
-import select
-import shutil
-import subprocess
-import tempfile
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Dict, List
-
-import psutil
 
 from app.core.config import settings
 from app.core.context import MediaInfo
@@ -82,8 +75,7 @@ class CureTMDbAnime(_PluginBase):
         self.patch_manager = MonkeyPatchManager()
         if self._enabled:
             # 在单独线程中运行 CureTMDbAnime 服务
-            self._thread = threading.Thread(target=self._run_binary_in_thread)
-            self._thread.daemon = True
+            self._thread = threading.Thread(target=self._run_binary_in_thread, daemon=True)
             self._thread.start()
 
     def load_config(self, config: dict):
@@ -103,10 +95,10 @@ class CureTMDbAnime(_PluginBase):
         """退出插件"""
         if getattr(self, "patch_manager", None):
             self.patch_manager.unpatch_all()
-        if self._process is not None and self._process.is_running():
+        if self._process and self._process.is_running():
             self._process.kill()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=5)  # 等待线程结束，或最多等待5秒
+        if self._thread and self._thread.is_alive():
+            self._thread.join()
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
@@ -242,45 +234,18 @@ class CureTMDbAnime(_PluginBase):
             )
 
         try:
-            # 启动子进程
+            from subprocess import PIPE
+            import psutil
+
             self._process = psutil.Popen(
-                cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+                cmd_args, stdout=PIPE, stderr=PIPE, text=True, bufsize=1
             )
             if self._process.is_running():
                 self.patch_manager.patch_build_url(self._port)
                 self.patch_manager.patch_torrent_helper(self.correct_meta)
+                # 输出服务日志
+                self._read_process_output()
 
-            def log_output_line(line: str):
-                if line.strip():
-                    parts = line.strip().split(" ", 3)
-                    log_level = parts[0][1:-1].lower()
-                    if log_level == "gin":
-                        log_func = logger.debug
-                    else:
-                        log_func = getattr(logger, log_level, logger.critical)
-                    log_func(f"🔗  {parts[-1].strip()}")
-
-            # 实时读取并记录输出
-            while self._process.is_running():
-                rlist, _, _ = select.select(
-                    [self._process.stdout, self._process.stderr], [], [], 0.1
-                )
-                if not rlist:
-                    time.sleep(0.1)
-
-                for stream in [self._process.stdout, self._process.stderr]:
-                    if stream in rlist:
-                        line = stream.readline()
-                        if line:
-                            log_output_line(line)
-
-            # 读取剩余输出
-            stdout, stderr = self._process.communicate()
-            for line in stdout.splitlines() + stderr.splitlines():
-                log_output_line(line)
-
-        except Exception as e:
-            logger.error(f"启动 CureTMDbAnime 服务时发生错误: {e}")
         finally:
             if self._process and self._process.is_running():
                 logger.warning("CureTMDbAnime 服务异常终止，尝试清理进程。")
@@ -288,6 +253,31 @@ class CureTMDbAnime(_PluginBase):
             if self._process:
                 self._process.wait()
             logger.info("CureTMDbAnime 服务线程已退出。")
+
+    def _read_process_output(self):
+        import selectors
+
+        def log_output_line(line: str):
+            if line.strip():
+                parts = line.strip().split(" ", 3)
+                log_level = parts[0][1:-1].lower()
+                log_func = logger.debug if log_level == "gin" else getattr(logger, log_level, logger.critical)
+                log_func(f"🔗  {parts[-1].strip()}")
+
+        with selectors.DefaultSelector() as sel:
+            sel.register(self._process.stdout, selectors.EVENT_READ, data='stdout')
+            sel.register(self._process.stderr, selectors.EVENT_READ, data='stderr')
+
+            while self._process.is_running():
+                events = sel.select(timeout=None)
+                for key, _ in events:
+                    line = key.fileobj.readline()
+                    if line:
+                        log_output_line(line)
+        # 读取剩余输出
+        stdout, stderr = self._process.communicate()
+        for line in stdout.splitlines() + stderr.splitlines():
+            log_output_line(line)
 
     def _check_version(self, version_path: Path) -> bool:
         """
@@ -329,6 +319,9 @@ class CureTMDbAnime(_PluginBase):
         """
         下载二进制文件
         """
+        import shutil
+        import tempfile
+
         url = self.__download_url()
         temp_dir = tempfile.mkdtemp()
         temp_file = Path(temp_dir) / f"{self.binary_name}.tmp"
