@@ -24,7 +24,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.0.3"
+    plugin_version = "2.0.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -242,7 +242,7 @@ class CureTMDbAnime(_PluginBase):
             )
             if self._process.is_running():
                 self.patch_manager.patch_build_url(self._port)
-                self.patch_manager.patch_torrent_helper(self.correct_meta)
+                self.patch_manager.patch_meta_enhancement(self.correct_meta)
                 # 输出服务日志
                 self._read_process_output()
 
@@ -363,8 +363,6 @@ class CureTMDbAnime(_PluginBase):
             # 识别媒体信息
             "recognize_media": self.on_recognize_media,
             "async_recognize_media": self.on_recognize_media,
-            # 文件整理
-            "transfer": self.on_transfer,
         }
 
     def is_eligible(self, mtype: MediaType = None) -> bool:
@@ -380,7 +378,7 @@ class CureTMDbAnime(_PluginBase):
 
         return True
 
-    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo) -> bool:
+    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo) -> MetaBase:
         """
         根据逻辑季信息调整元数据对象中的季号和集号。
 
@@ -388,7 +386,7 @@ class CureTMDbAnime(_PluginBase):
         :param mediainfo: 媒体信息对象
         """
         if not meta or not mediainfo:
-            return False
+            return meta
 
         # 检查识别词是否已偏移集数
         if meta.apply_words:
@@ -404,7 +402,7 @@ class CureTMDbAnime(_PluginBase):
                 logger.info(
                     f"存在应用的集数偏移识别词 `{matched_word}`, 跳过调整元数据"
                 )
-                return False
+                return meta
 
         corrected = False
 
@@ -477,7 +475,7 @@ class CureTMDbAnime(_PluginBase):
                 f"{mediainfo.title_year} 元数据季集已调整：{orig_season_episode} ==> {meta.season_episode}"
             )
 
-        return corrected
+        return meta
 
     def on_recognize_media(
         self,
@@ -516,16 +514,3 @@ class CureTMDbAnime(_PluginBase):
 
         self.correct_meta(meta, media_info)
         return media_info
-
-    def on_transfer(self, meta: MetaBase, mediainfo: MediaInfo, **kwargs):
-        """
-        文件整理
-
-        :param meta: 预识别的元数据
-        :param mediainfo:  识别的媒体信息
-        """
-        if mediainfo.type != MediaType.TV:
-            return None
-
-        self.correct_meta(meta, mediainfo)
-        return None

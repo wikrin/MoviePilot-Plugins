@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from httpx import _client, _models
 from requests.sessions import Session
 
+from app.chain.transfer import JobManager
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules.themoviedb.tmdbv3api.tmdb import TMDb
@@ -149,6 +150,23 @@ class MonkeyPatchManager:
 
         self.patch_requests()
         self.patch_httpx()
+
+    def patch_meta_enhancement(self, func: Callable):
+        """
+        在关键节点注入自定义元数据处理逻辑
+        """
+        self.patch_job_manager(func)
+        self.patch_torrent_helper(func)
+
+    def patch_job_manager(self, func: Callable):
+
+        original_running_task = JobManager.running_task
+
+        def new_running_task(instance, task):
+            task.meta = func(task.meta, task.mediainfo)
+            return original_running_task(instance, task)
+
+        self.patch(JobManager, "running_task", new_running_task)
 
     def patch_torrent_helper(self, func: Callable):
 
