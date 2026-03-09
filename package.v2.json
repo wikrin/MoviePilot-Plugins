@@ -96,11 +96,12 @@
       "name": "CTMDbA",
       "description": "对 TMDb 上被合并为一季的番剧进行季信息分离。",
       "labels": "整理, 刮削, 识别",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "2.0.3": "改进进程输出处理机制, 优化集数验证逻辑",
         "2.0.2": "修复已分季的条目还会使用bangumi信息分割的问题, 添加版本检查",
         "2.0.1": "重构为二进制文件模式, 修复元数据季集调整, 同时增加对搜索时的支持",
         "1.4.0": "新增重复集去重",

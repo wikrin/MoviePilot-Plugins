@@ -24,7 +24,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.0.2"
+    plugin_version = "2.0.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -436,7 +436,9 @@ class CureTMDbAnime(_PluginBase):
             elif (
                 mediainfo.number_of_episodes
                 and season_num == mediainfo.number_of_seasons
-                and len(mediainfo.seasons.get(season_num, [])) < episode_num
+                and len(mediainfo.seasons.get(season_num, []))
+                < episode_num
+                <= len(mediainfo.seasons.get(season_num, [])) + 3
             ):
                 logger.debug(
                     f"{mediainfo.title_year} TMDb集数信息可能未更新, 不调整元数据"
