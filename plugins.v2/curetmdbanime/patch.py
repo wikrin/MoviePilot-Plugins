@@ -56,7 +56,9 @@ class MonkeyPatchManager:
                 hostname == parsed_no_proxy_url.hostname
                 and port == parsed_no_proxy_url.port
             ):
-                logger.debug(f"URL {url} 匹配不需要代理的URL {no_proxy_url}, 将绕过代理。")
+                logger.debug(
+                    f"URL {url} 匹配不需要代理的URL {no_proxy_url}, 将绕过代理。"
+                )
                 return True
         return False
 
@@ -90,9 +92,11 @@ class MonkeyPatchManager:
             logger.info("没有应用的补丁需要恢复")
             return
 
-        for (target_class, method_name), original_method in list(self._original_methods.items()):
+        for (target_class, method_name), original_method in list(
+            self._original_methods.items()
+        ):
             setattr(target_class, method_name, original_method)
-            logger.info(f"方法 {target_class.__name__}.{method_name} 已恢复")
+            logger.debug(f"方法 {target_class.__name__}.{method_name} 已恢复")
 
         self._original_methods.clear()
         self._is_patched = False
@@ -103,12 +107,18 @@ class MonkeyPatchManager:
 
         original_merge_environment_settings = Session.merge_environment_settings
 
-        def new_merge_environment_settings(instance, url, proxies, stream, verify, cert):
+        def new_merge_environment_settings(
+            instance, url, proxies, stream, verify, cert
+        ):
             if self._should_bypass_no_proxy_url(url):
                 proxies = None
-            return original_merge_environment_settings(instance, url, proxies, stream, verify, cert)
+            return original_merge_environment_settings(
+                instance, url, proxies, stream, verify, cert
+            )
 
-        self.patch(Session, "merge_environment_settings", new_merge_environment_settings)
+        self.patch(
+            Session, "merge_environment_settings", new_merge_environment_settings
+        )
 
     def patch_httpx(self):
 
@@ -146,7 +156,7 @@ class MonkeyPatchManager:
                 instance.language,
             )
 
-        self.patch(TMDb, '_build_url', new_build_url)
+        self.patch(TMDb, "_build_url", new_build_url)
 
         self.patch_requests()
         self.patch_httpx()

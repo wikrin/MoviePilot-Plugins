@@ -24,7 +24,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.0.4"
+    plugin_version = "2.0.5"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -42,8 +42,9 @@ class CureTMDbAnime(_PluginBase):
 
     # 私有属性
     _contextvars = contextvars.ContextVar("recursion_flag", default=False)
-    _process = None
+    _patch_manager = MonkeyPatchManager()
     _thread: Optional[threading.Thread] = None
+    _event: threading.Event = threading.Event()
 
     # 配置属性
     _enabled: bool = False
@@ -68,14 +69,17 @@ class CureTMDbAnime(_PluginBase):
             self._contextvars.reset(token)
 
     def init_plugin(self, config: dict = None):
+        # 重置停止事件
+        self._event.clear()
         # 停止现有任务
         self.stop_service()
         # 加载插件配置
         self.load_config(config)
-        self.patch_manager = MonkeyPatchManager()
         if self._enabled:
             # 在单独线程中运行 CureTMDbAnime 服务
-            self._thread = threading.Thread(target=self._run_binary_in_thread, daemon=True)
+            self._thread = threading.Thread(
+                target=self._run_binary_in_thread, daemon=True
+            )
             self._thread.start()
 
     def load_config(self, config: dict):
@@ -93,12 +97,16 @@ class CureTMDbAnime(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        if getattr(self, "patch_manager", None):
-            self.patch_manager.unpatch_all()
-        if self._process and self._process.is_running():
-            self._process.kill()
-        if self._thread and self._thread.is_alive():
-            self._thread.join()
+        if self._patch_manager.is_patched():
+            self._patch_manager.unpatch_all()
+        if self._thread:
+            # 设置停止事件
+            self._event.set()
+            # 等待线程结束
+            self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning("CureTMDbAnime 服务线程未能及时停止。")
+            self._thread = None
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
@@ -237,47 +245,47 @@ class CureTMDbAnime(_PluginBase):
             from subprocess import PIPE
             import psutil
 
-            self._process = psutil.Popen(
+            process = psutil.Popen(
                 cmd_args, stdout=PIPE, stderr=PIPE, text=True, bufsize=1
             )
-            if self._process.is_running():
-                self.patch_manager.patch_build_url(self._port)
-                self.patch_manager.patch_meta_enhancement(self.correct_meta)
+            if process.is_running():
+                self._patch_manager.patch_build_url(self._port)
+                self._patch_manager.patch_meta_enhancement(self.correct_meta)
                 # 输出服务日志
-                self._read_process_output()
+                self._read_process_output(process)
 
         finally:
-            if self._process and self._process.is_running():
-                logger.warning("CureTMDbAnime 服务异常终止，尝试清理进程。")
-                self._process.kill()
-            if self._process:
-                self._process.wait()
+            if process and process.is_running():
+                logger.warning("CureTMDbAnime 服务终止，尝试清理进程。")
+                process.kill()
+            if process:
+                process.wait()
             logger.info("CureTMDbAnime 服务线程已退出。")
 
-    def _read_process_output(self):
+    def _read_process_output(self, process):
         import selectors
 
         def log_output_line(line: str):
             if line.strip():
                 parts = line.strip().split(" ", 3)
                 log_level = parts[0][1:-1].lower()
-                log_func = logger.debug if log_level == "gin" else getattr(logger, log_level, logger.critical)
+                log_func = (
+                    logger.debug
+                    if log_level == "gin"
+                    else getattr(logger, log_level, logger.critical)
+                )
                 log_func(f"🔗  {parts[-1].strip()}")
 
         with selectors.DefaultSelector() as sel:
-            sel.register(self._process.stdout, selectors.EVENT_READ, data='stdout')
-            sel.register(self._process.stderr, selectors.EVENT_READ, data='stderr')
+            sel.register(process.stdout, selectors.EVENT_READ, data="stdout")
+            sel.register(process.stderr, selectors.EVENT_READ, data="stderr")
 
-            while self._process.is_running():
-                events = sel.select(timeout=None)
+            while not self._event.is_set():
+                events = sel.select(timeout=1)
                 for key, _ in events:
                     line = key.fileobj.readline()
                     if line:
                         log_output_line(line)
-        # 读取剩余输出
-        stdout, stderr = self._process.communicate()
-        for line in stdout.splitlines() + stderr.splitlines():
-            log_output_line(line)
 
     def _check_version(self, version_path: Path) -> bool:
         """
@@ -385,7 +393,7 @@ class CureTMDbAnime(_PluginBase):
         :param meta: 原始元数据对象
         :param mediainfo: 媒体信息对象
         """
-        if not meta or not mediainfo:
+        if not meta or not mediainfo or mediainfo.type != MediaType.TV:
             return meta
 
         # 检查识别词是否已偏移集数
@@ -452,7 +460,7 @@ class CureTMDbAnime(_PluginBase):
             ):
                 offset = 0
                 for season_key, episodes_list in mediainfo.seasons.items():
-                    if season_key == 0: # 排除季0
+                    if season_key == 0:  # 排除季0
                         continue
                     if (found_episode := episode_num - offset) in episodes_list:
                         if is_begin:
@@ -482,8 +490,6 @@ class CureTMDbAnime(_PluginBase):
         meta: MetaBase = None,
         mtype: MediaType = None,
         tmdbid: Optional[int] = None,
-        episode_group: Optional[str] = None,
-        cache: Optional[bool] = True,
         **kwargs,
     ) -> Optional[MediaInfo]:
 
@@ -501,16 +507,11 @@ class CureTMDbAnime(_PluginBase):
                 meta=meta,
                 tmdbid=tmdbid,
                 mtype=mtype,
-                episode_group=episode_group,
-                cache=cache,
                 **kwargs,
             )
         # 识别失败，阻止run_module继续执行
         if media_info is None:
             return False
-        # 只处理电视剧
-        if media_info.type != MediaType.TV:
-            return media_info
 
         self.correct_meta(meta, media_info)
         return media_info
