@@ -96,11 +96,12 @@
       "name": "CTMDbA",
       "description": "对 TMDb 上被合并为一季的番剧进行季信息分离。",
       "labels": "整理, 刮削, 识别",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
       "author": "Attente",
       "level": 1,
       "history": {
+        "2.0.6": "更新二进制文件版本, 修复了部分番剧错误分季的问题",
         "2.0.5": "优化插件进程管理和线程控制, 解决了阻塞主程序启动的问题",
         "2.0.4": "修复入库通知集数不正确的问题",
         "2.0.3": "改进进程输出处理机制, 优化集数验证逻辑",

@@ -188,12 +188,12 @@ class MonkeyPatchManager:
             frame = sys._getframe(1)
             if mediainfo := frame.f_locals.get("mediainfo"):
                 func(meta, mediainfo)
-            return original_match_season_episodes(torrent, meta, season_episodes)
+            return original_match_season_episodes(torrent=torrent, meta=meta, season_episodes=season_episodes)
 
         @staticmethod
         def new_match_torrent(mediainfo, torrent_meta, torrent) -> bool:
             func(torrent_meta, mediainfo)
-            return original_match_torrent(mediainfo, torrent_meta, torrent)
+            return original_match_torrent(mediainfo=mediainfo, torrent_meta=torrent_meta, torrent=torrent)
 
         self.patch(TorrentHelper, "match_season_episodes", new_match_season_episodes)
         self.patch(TorrentHelper, "match_torrent", new_match_torrent)

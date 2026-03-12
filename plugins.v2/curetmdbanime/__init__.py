@@ -24,7 +24,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.0.5"
+    plugin_version = "2.0.6"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -38,7 +38,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.0.1"
+    binary_version = "1.0.2"
 
     # 私有属性
     _contextvars = contextvars.ContextVar("recursion_flag", default=False)
