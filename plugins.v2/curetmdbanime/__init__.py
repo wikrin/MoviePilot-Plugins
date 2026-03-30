@@ -1,12 +1,16 @@
-import contextvars
+import os
+import stat
 import threading
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
+import docker
+
+from app.core.cache import cached
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
+from app.helper.system import SystemHelper
 from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas.types import MediaType
@@ -24,7 +28,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.0.6"
+    plugin_version = "2.1.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -38,10 +42,9 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.0.2"
+    binary_version = "1.1.0"
 
     # 私有属性
-    _contextvars = contextvars.ContextVar("recursion_flag", default=False)
     _patch_manager = MonkeyPatchManager()
     _thread: Optional[threading.Thread] = None
     _event: threading.Event = threading.Event()
@@ -58,15 +61,6 @@ class CureTMDbAnime(_PluginBase):
         "source",
         "port",
     )
-
-    @contextmanager
-    def no_recursion(self):
-        """防递归上下文管理器"""
-        token = self._contextvars.set(True)
-        try:
-            yield
-        finally:
-            self._contextvars.reset(token)
 
     def init_plugin(self, config: dict = None):
         # 重置停止事件
@@ -89,12 +83,6 @@ class CureTMDbAnime(_PluginBase):
             for key in self.CONFIG_KEYS:
                 setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
 
-    def get_service(self) -> List[Dict[str, Any]]:
-        """
-        注册插件公共服务
-        """
-        pass
-
     def stop_service(self):
         """退出插件"""
         if self._patch_manager.is_patched():
@@ -109,9 +97,6 @@ class CureTMDbAnime(_PluginBase):
             self._thread = None
 
     def get_api(self) -> List[Dict[str, Any]]:
-        pass
-
-    def get_command(self):
         pass
 
     def get_form(self):
@@ -198,7 +183,7 @@ class CureTMDbAnime(_PluginBase):
         pass
 
     def get_state(self):
-        return self._enabled
+        return self._patch_manager.is_patched()
 
     def _run_binary_in_thread(self):
         """
@@ -220,6 +205,12 @@ class CureTMDbAnime(_PluginBase):
 
             # 保存版本信息
             version_path.write_text(self.binary_version)
+
+        # 确保文件有可执行权限
+        if not os.access(executable_path, os.X_OK) and not self.__fix_exec_permission(
+            executable_path
+        ):
+            return
 
         # 构建命令行参数列表
         cmd_args = [
@@ -300,6 +291,87 @@ class CureTMDbAnime(_PluginBase):
             return version == self.binary_version
         return False
 
+    @staticmethod
+    def __fix_exec_permission(file_path: Path) -> bool:
+        """
+        修复文件可执行权限
+
+        :return bool: 修复成功返回 True，否则返回 False
+        """
+        try:
+            file_stat = file_path.stat()
+            current_uid = os.getuid()
+
+            # 文件所有者 或 root
+            has_permission = current_uid == file_stat.st_uid or current_uid == 0
+
+            if has_permission:
+                # 直接修改权限
+                logger.info("当前用户有权限修改文件，直接设置可执行权限")
+                file_path.chmod(file_path.stat().st_mode | stat.S_IXUSR)
+
+                if os.access(file_path, os.X_OK):
+                    logger.info(
+                        f"权限修复成功：{oct(file_path.stat().st_mode & 0o777)}"
+                    )
+                    return True
+                else:
+                    logger.error("权限设置后仍无法执行")
+                    return False
+            else:
+                # 无权限修改，检查是否为 Docker 环境
+                logger.info("当前用户无权限修改文件，检查 Docker 环境")
+                return CureTMDbAnime.__fix_permission_via_docker(file_path)
+
+        except Exception as e:
+            logger.error(f"修复可执行权限失败：{e}")
+            return False
+
+    @staticmethod
+    def __fix_permission_via_docker(file_path: Path) -> bool:
+        """
+        通过 Docker 守护进程修改文件权限
+
+        :return bool: 修复成功返回 True，否则返回 False
+        """
+        try:
+            # 检查是否为 Docker 环境
+            if not SystemUtils.is_docker():
+                logger.error("非 Docker 环境，无法通过 Docker 守护进程修改权限")
+                return False
+
+            # 获取容器 ID
+            container_id = SystemHelper._get_container_id()
+            if not container_id:
+                logger.error("无法获取容器 ID")
+                return False
+
+            # 创建 Docker 客户端
+            client = docker.DockerClient(base_url=settings.DOCKER_CLIENT_API)
+            container = client.containers.get(container_id)
+
+            logger.info("通过 Docker 容器执行权限修改")
+
+            # 执行命令
+            exit_code, output = container.exec_run(
+                cmd=["chmod", "+x", file_path.as_posix()],
+                stdout=False,
+                detach=True,
+            )
+
+            if exit_code == 0:
+                logger.info("通过 Docker 守护进程修改权限成功")
+                return os.access(file_path, os.X_OK)
+            else:
+                logger.error(
+                    f"通过 Docker 修改权限失败：{output.decode() if output else '无输出'}"
+                )
+                return False
+
+        except Exception as e:
+            logger.error(f"通过 Docker 修改权限失败：{e}")
+            return False
+
     def __download_url(self):
         """
         获取下载链接
@@ -363,28 +435,48 @@ class CureTMDbAnime(_PluginBase):
             except Exception as e:
                 logger.warning(f"清理临时目录失败: {e}")
 
-    def get_module(self) -> Dict[str, Any]:
+    @cached(ttl=2 * 3600)
+    def _get_logical_mapping(self, tmdb_id: int):
         """
-        获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
+        获取 TMDB 逻辑季集映射信息
         """
-        return {
-            # 识别媒体信息
-            "recognize_media": self.on_recognize_media,
-            "async_recognize_media": self.on_recognize_media,
-        }
+        mapping: Dict[tuple[int, int], tuple[int, int]] = {}
 
-    def is_eligible(self, mtype: MediaType = None) -> bool:
+        result = RequestUtils(timeout=2).get_json(
+            f"http://127.0.0.1:{self._port}/cache/mapping/{tmdb_id}"
+        )
+        if not isinstance(result, dict):
+            return mapping
 
-        if self._contextvars.get():
-            return False
+        for season_key, episodes in result.items():
+            try:
+                season_num = int(season_key)
+            except (TypeError, ValueError):
+                continue
 
-        if settings.RECOGNIZE_SOURCE != "themoviedb":
-            return False
+            if not isinstance(episodes, dict):
+                continue
 
-        if mtype == MediaType.MOVIE:
-            return False
+            for episode_key, item in episodes.items():
+                try:
+                    episode_num = int(episode_key)
+                except (TypeError, ValueError):
+                    continue
 
-        return True
+                if not isinstance(item, dict):
+                    continue
+
+                logical_season = item.get("season")
+                logical_episode = item.get("episode")
+                try:
+                    logical_season = int(logical_season)
+                    logical_episode = int(logical_episode)
+                except (TypeError, ValueError):
+                    continue
+
+                mapping[(season_num, episode_num)] = (logical_season, logical_episode)
+
+        return mapping
 
     def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo) -> MetaBase:
         """
@@ -413,6 +505,7 @@ class CureTMDbAnime(_PluginBase):
                 return meta
 
         corrected = False
+        tmdb_mapping = self._get_logical_mapping(mediainfo.tmdb_id)
 
         def adjust_episode(is_begin: bool) -> bool:
             """调整单个集数信息"""
@@ -423,11 +516,8 @@ class CureTMDbAnime(_PluginBase):
             season_num = (meta.begin_season if is_begin else meta.end_season) or 1
 
             # TMDB 使用连续集号时
-            if result := RequestUtils().get_json(
-                f"http://127.0.0.1:{self._port}/cache/{mediainfo.tmdb_id}/mapping/{season_num}/{episode_num}"
-            ):
-                logical_season = result["season"]
-                logical_episode = result["episode"]
+            if result := tmdb_mapping.get((season_num, episode_num)):
+                logical_season, logical_episode = result
                 if season_num == logical_season and episode_num == logical_episode:
                     return False
                 if is_begin:
@@ -467,7 +557,10 @@ class CureTMDbAnime(_PluginBase):
                             meta.begin_season = season_key
                             meta.begin_episode = found_episode
                         else:
-                            meta.end_season = season_key if meta.end_season else None
+                            if meta.begin_season is None:
+                                meta.begin_season = 1
+                            if season_key != meta.begin_season:
+                                meta.end_season = season_key
                             meta.end_episode = found_episode
                         return True
                     offset += len(episodes_list)
@@ -480,38 +573,7 @@ class CureTMDbAnime(_PluginBase):
 
         if corrected:
             logger.info(
-                f"{mediainfo.title_year} 元数据季集已调整：{orig_season_episode} ==> {meta.season_episode}"
+                f"{mediainfo.title_year} {meta.org_string}：{orig_season_episode} ==> {meta.season_episode}"
             )
 
         return meta
-
-    def on_recognize_media(
-        self,
-        meta: MetaBase = None,
-        mtype: MediaType = None,
-        tmdbid: Optional[int] = None,
-        **kwargs,
-    ) -> Optional[MediaInfo]:
-
-        if not self.is_eligible(mtype=mtype):
-            return None
-
-        if not tmdbid and not meta:
-            return None
-
-        if meta and not tmdbid and not meta.name:
-            return None
-
-        with self.no_recursion():
-            media_info = self.chain.recognize_media(
-                meta=meta,
-                tmdbid=tmdbid,
-                mtype=mtype,
-                **kwargs,
-            )
-        # 识别失败，阻止run_module继续执行
-        if media_info is None:
-            return False
-
-        self.correct_meta(meta, media_info)
-        return media_info

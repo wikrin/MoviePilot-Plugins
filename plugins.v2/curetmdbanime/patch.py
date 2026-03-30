@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 from httpx import _client, _models
 from requests.sessions import Session
 
+from app.core.context import MediaInfo
 from app.chain.transfer import JobManager
 from app.helper.torrent import TorrentHelper
 from app.log import logger
@@ -167,6 +168,7 @@ class MonkeyPatchManager:
         """
         self.patch_job_manager(func)
         self.patch_torrent_helper(func)
+        self.patch_mediainfo(func)
 
     def patch_job_manager(self, func: Callable):
 
@@ -181,7 +183,6 @@ class MonkeyPatchManager:
     def patch_torrent_helper(self, func: Callable):
 
         original_match_season_episodes = TorrentHelper.match_season_episodes
-        original_match_torrent = TorrentHelper.match_torrent
 
         @staticmethod
         def new_match_season_episodes(torrent, meta, season_episodes) -> bool:
@@ -190,13 +191,19 @@ class MonkeyPatchManager:
                 func(meta, mediainfo)
             return original_match_season_episodes(torrent=torrent, meta=meta, season_episodes=season_episodes)
 
-        @staticmethod
-        def new_match_torrent(mediainfo, torrent_meta, torrent) -> bool:
-            func(torrent_meta, mediainfo)
-            return original_match_torrent(mediainfo=mediainfo, torrent_meta=torrent_meta, torrent=torrent)
-
         self.patch(TorrentHelper, "match_season_episodes", new_match_season_episodes)
-        self.patch(TorrentHelper, "match_torrent", new_match_torrent)
+
+    def patch_mediainfo(self, func: Callable):
+
+        original_set_category = MediaInfo.set_category
+
+        def new_set_category(instance, cat: str):
+            frame = sys._getframe(1)
+            if meta := frame.f_locals.get("meta"):
+                func(meta, instance)
+            return original_set_category(instance, cat)
+
+        self.patch(MediaInfo, "set_category", new_set_category)
 
     def is_patched(self):
 
