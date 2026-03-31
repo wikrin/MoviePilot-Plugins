@@ -172,13 +172,13 @@ class MonkeyPatchManager:
 
     def patch_job_manager(self, func: Callable):
 
-        original_running_task = JobManager.running_task
+        original_add_task = JobManager.add_task
 
-        def new_running_task(instance, task):
+        def new_add_task(instance, task, *args, **kwargs):
             task.meta = func(task.meta, task.mediainfo)
-            return original_running_task(instance, task)
+            return original_add_task(instance, task, *args, **kwargs)
 
-        self.patch(JobManager, "running_task", new_running_task)
+        self.patch(JobManager, "add_task", new_add_task)
 
     def patch_torrent_helper(self, func: Callable):
 
@@ -189,7 +189,9 @@ class MonkeyPatchManager:
             frame = sys._getframe(1)
             if mediainfo := frame.f_locals.get("mediainfo"):
                 func(meta, mediainfo)
-            return original_match_season_episodes(torrent=torrent, meta=meta, season_episodes=season_episodes)
+            return original_match_season_episodes(
+                torrent=torrent, meta=meta, season_episodes=season_episodes
+            )
 
         self.patch(TorrentHelper, "match_season_episodes", new_match_season_episodes)
 

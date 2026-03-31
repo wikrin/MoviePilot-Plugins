@@ -28,7 +28,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.1.1"
+    plugin_version = "2.1.2"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -44,11 +44,6 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件版本
     binary_version = "1.1.0"
 
-    # 私有属性
-    _patch_manager = MonkeyPatchManager()
-    _thread: Optional[threading.Thread] = None
-    _event: threading.Event = threading.Event()
-
     # 配置属性
     _enabled: bool = False
     _source: Optional[str] = (
@@ -61,6 +56,12 @@ class CureTMDbAnime(_PluginBase):
         "source",
         "port",
     )
+
+    def __init__(self):
+        super().__init__()
+        self._patch_manager = MonkeyPatchManager()
+        self._thread: Optional[threading.Thread] = None
+        self._event: threading.Event = threading.Event()
 
     def init_plugin(self, config: dict = None):
         # 重置停止事件
