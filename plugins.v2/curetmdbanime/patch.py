@@ -182,7 +182,18 @@ class MonkeyPatchManager:
 
     def patch_torrent_helper(self, func: Callable):
 
+        original_match_torrent = TorrentHelper.match_torrent
         original_match_season_episodes = TorrentHelper.match_season_episodes
+
+        @staticmethod
+        def new_match_torrent(mediainfo, torrent_meta, torrent) -> bool:
+            # 补丁此方法用于非订阅搜索
+
+            if result := original_match_torrent(
+                mediainfo=mediainfo, torrent_meta=torrent_meta, torrent=torrent
+            ):
+                func(torrent_meta, mediainfo)
+            return result
 
         @staticmethod
         def new_match_season_episodes(torrent, meta, season_episodes) -> bool:
@@ -193,6 +204,7 @@ class MonkeyPatchManager:
                 torrent=torrent, meta=meta, season_episodes=season_episodes
             )
 
+        self.patch(TorrentHelper, "match_torrent", new_match_torrent)
         self.patch(TorrentHelper, "match_season_episodes", new_match_season_episodes)
 
     def patch_mediainfo(self, func: Callable):
