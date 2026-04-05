@@ -28,7 +28,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.1.2"
+    plugin_version = "2.1.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -42,7 +42,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.1.0"
+    binary_version = "1.1.1"
 
     # 配置属性
     _enabled: bool = False
