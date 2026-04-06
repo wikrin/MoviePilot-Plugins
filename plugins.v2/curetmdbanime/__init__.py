@@ -28,7 +28,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.1.3"
+    plugin_version = "2.1.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -42,7 +42,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.1.1"
+    binary_version = "1.2.0"
 
     # 配置属性
     _enabled: bool = False
@@ -194,18 +194,13 @@ class CureTMDbAnime(_PluginBase):
         working_dir = settings.PLUGIN_DATA_PATH / self.__class__.__name__.lower()
         # 可执行文件路径
         executable_path = working_dir / self.binary_name
-        # 版本文件路径
-        version_path = working_dir / "version.txt"
 
-        if not executable_path.exists() or not self._check_version(version_path):
+        if not executable_path.exists() or not self._check_version(executable_path):
             logger.info("尝试下载二级制文件...")
             self.__download(executable_path)
             if not executable_path.exists():
                 logger.error("二级制文件不存在，无法启动 CureTMDbAnime 服务。")
                 return
-
-            # 保存版本信息
-            version_path.write_text(self.binary_version)
 
         # 确保文件有可执行权限
         if not os.access(executable_path, os.X_OK) and not self.__fix_exec_permission(
@@ -216,21 +211,22 @@ class CureTMDbAnime(_PluginBase):
         # 构建命令行参数列表
         cmd_args = [
             executable_path.as_posix(),
-            "--PORT",
+            "--debug",
+            "--port",
             str(self._port),
-            "--DATA_DIR",
+            "--data-dir",
             working_dir.as_posix(),
         ]
 
         if self._source:
-            cmd_args.extend(["--CURE_SOURCE", self._source])
+            cmd_args.extend(["--cure-source", self._source])
 
         if settings.PROXY_HOST:
-            cmd_args.extend(["--PROXY", settings.PROXY_HOST])
+            cmd_args.extend(["--proxy", settings.PROXY_HOST])
 
         if settings.TMDB_API_DOMAIN:
             cmd_args.extend(
-                ["--TMDB_UPSTREAM_URL", f"https://{settings.TMDB_API_DOMAIN}"]
+                ["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"]
             )
 
         try:
@@ -279,18 +275,29 @@ class CureTMDbAnime(_PluginBase):
                     if line:
                         log_output_line(line)
 
-    def _check_version(self, version_path: Path) -> bool:
+    def _check_version(self, executable: Path) -> bool:
         """
         检查版本
 
-        :param version_path: 版本文件路径
+        :param executable: 二进制文件路径
         :return: 如果版本匹配则返回True，否则返回False
         """
-        if version_path.exists():
-            with open(version_path, "r", encoding="utf-8") as f:
-                version = f.read().strip()
-            return version == self.binary_version
-        return False
+        # 确保文件有可执行权限
+        if not os.access(executable, os.X_OK) and not self.__fix_exec_permission(
+            executable
+        ):
+            return False
+
+        from app.utils.string import StringUtils
+
+        version = SystemUtils.execute(f"{executable.as_posix()} -v")
+        result, msg = StringUtils.compare_version(version, ">=", self.binary_version, True)
+        if result is None:
+            logger.error(f"比较版本出错：{msg}")
+            return False
+
+        logger.info(msg)
+        return result
 
     @staticmethod
     def __fix_exec_permission(file_path: Path) -> bool:
