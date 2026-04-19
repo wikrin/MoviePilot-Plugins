@@ -63,6 +63,36 @@ class MonkeyPatchManager:
                 return True
         return False
 
+    @staticmethod
+    def _retarget_method_filename(new_method, original_method):
+        """
+        将补丁方法的 co_filename 对齐到原始方法
+        """
+        original_func = getattr(original_method, "__func__", original_method)
+        target_filename = getattr(getattr(original_func, "__code__", None), "co_filename", None)
+        if not target_filename:
+            return new_method
+
+        is_static = isinstance(new_method, staticmethod)
+        is_class = isinstance(new_method, classmethod)
+        patch_func = getattr(new_method, "__func__", new_method)
+        patch_code = getattr(patch_func, "__code__", None)
+
+        if not patch_code or not hasattr(patch_code, "replace"):
+            return new_method
+
+        try:
+            patch_func.__code__ = patch_code.replace(co_filename=target_filename)
+        except Exception as e:
+            logger.debug(f"方法文件名对齐失败，保留原补丁实现: {e}")
+            return new_method
+
+        if is_static:
+            return staticmethod(patch_func)
+        if is_class:
+            return classmethod(patch_func)
+        return patch_func
+
     def patch(self, target_class, method_name: str, new_method):
         """
         通用猴子补丁。
@@ -81,7 +111,8 @@ class MonkeyPatchManager:
 
         self._original_methods[patch_key] = original_method
 
-        setattr(target_class, method_name, new_method)
+        patched_method = self._retarget_method_filename(new_method, original_method)
+        setattr(target_class, method_name, patched_method)
         logger.debug(f"方法 {target_class.__name__}.{method_name} 已补丁")
         self._is_patched = True
 

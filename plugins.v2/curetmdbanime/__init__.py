@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Optional, Dict, List
 
 import docker
+from pydantic import BaseModel, Field
 
 from app.core.cache import cached
 from app.core.config import settings
@@ -17,7 +18,23 @@ from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
 
+from .meta_adjust import MetaAdjustService
 from .patch import MonkeyPatchManager
+
+
+class CureTMDbAnimeConfig(BaseModel):
+    # 启用插件
+    enabled: bool = Field(default=False)
+    # 启用元数据修正
+    enable_correction: bool = Field(default=True)
+    # 最新季允许的越界宽限集数
+    grace_episodes: int = Field(default=3, ge=1, le=5)
+    # 远程数据源地址
+    source: Optional[str] = Field(
+        default="https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
+    )
+    # 运行端口
+    port: int = Field(default=8632, ge=1024, le=65535)
 
 
 class CureTMDbAnime(_PluginBase):
@@ -42,35 +59,24 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.2.0"
-
-    # 配置属性
-    _enabled: bool = False
-    _source: Optional[str] = (
-        "https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json"
-    )
-    _port: int = 8632
-
-    CONFIG_KEYS = (
-        "enabled",
-        "source",
-        "port",
-    )
+    binary_version = "1.2.1"
 
     def __init__(self):
         super().__init__()
+        self.config = CureTMDbAnimeConfig()
         self._patch_manager = MonkeyPatchManager()
         self._thread: Optional[threading.Thread] = None
         self._event: threading.Event = threading.Event()
 
     def init_plugin(self, config: dict = None):
-        # 重置停止事件
-        self._event.clear()
         # 停止现有任务
         self.stop_service()
         # 加载插件配置
         self.load_config(config)
-        if self._enabled:
+        self._adjust_service = MetaAdjustService(
+            grace_episodes=self.config.grace_episodes,
+        )
+        if self.config.enabled:
             # 在单独线程中运行 CureTMDbAnime 服务
             self._thread = threading.Thread(
                 target=self._run_binary_in_thread, daemon=True
@@ -80,14 +86,11 @@ class CureTMDbAnime(_PluginBase):
     def load_config(self, config: dict):
         """加载配置"""
         if config:
-            # 遍历配置中的键并设置相应的属性
-            for key in self.CONFIG_KEYS:
-                setattr(self, f"_{key}", config.get(key, getattr(self, f"_{key}")))
+            self.config = CureTMDbAnimeConfig(**config)
 
     def stop_service(self):
         """退出插件"""
-        if self._patch_manager.is_patched():
-            self._patch_manager.unpatch_all()
+        self._patch_manager.unpatch_all()
         if self._thread:
             # 设置停止事件
             self._event.set()
@@ -95,6 +98,8 @@ class CureTMDbAnime(_PluginBase):
             self._thread.join(timeout=5)
             if self._thread.is_alive():
                 logger.warning("CureTMDbAnime 服务线程未能及时停止。")
+            # 重置停止事件
+            self._event.clear()
             self._thread = None
 
     def get_api(self) -> List[Dict[str, Any]]:
@@ -110,7 +115,7 @@ class CureTMDbAnime(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
                                 "content": [
                                     {
                                         "component": "VSwitch",
@@ -121,31 +126,48 @@ class CureTMDbAnime(_PluginBase):
                                     }
                                 ],
                             },
-                            # {
-                            #     'component': 'VCol',
-                            #     'props': {'cols': 12, 'md': 4},
-                            #     'content': [
-                            #         {
-                            #             'component': 'VSwitch',
-                            #             'props': {
-                            #                 'model': 'use_cont_eps',
-                            #                 'label': '使用连续集号',
-                            #             }
-                            #         }
-                            #     ]
-                            # },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
+                                "props": {"cols": 12, "md": 3},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enable_correction",
+                                            "label": "启用元数据修正",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
                                 "content": [
                                     {
                                         "component": "VTextField",
                                         "props": {
                                             "model": "port",
-                                            "label": "监听端口",
+                                            "label": "端口",
                                             "type": "number",
                                             "min": 1024,
                                             "max": 65535,
+                                            "step": 1,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 3},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "grace_episodes",
+                                            "label": "集数越界宽限",
+                                            "type": "number",
+                                            "min": 1,
+                                            "max": 5,
                                             "step": 1,
                                         },
                                     }
@@ -176,6 +198,8 @@ class CureTMDbAnime(_PluginBase):
             }
         ], {
             "enabled": False,
+            "enable_correction": True,
+            "grace_episodes": 2,
             "source": "https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
             "port": 8632,
         }
@@ -213,21 +237,19 @@ class CureTMDbAnime(_PluginBase):
             executable_path.as_posix(),
             "--debug",
             "--port",
-            str(self._port),
+            str(self.config.port),
             "--data-dir",
             working_dir.as_posix(),
         ]
 
-        if self._source:
-            cmd_args.extend(["--cure-source", self._source])
+        if self.config.source:
+            cmd_args.extend(["--cure-source", self.config.source])
 
         if settings.PROXY_HOST:
             cmd_args.extend(["--proxy", settings.PROXY_HOST])
 
         if settings.TMDB_API_DOMAIN:
-            cmd_args.extend(
-                ["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"]
-            )
+            cmd_args.extend(["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"])
 
         try:
             from subprocess import PIPE
@@ -237,8 +259,9 @@ class CureTMDbAnime(_PluginBase):
                 cmd_args, stdout=PIPE, stderr=PIPE, text=True, bufsize=1
             )
             if process.is_running():
-                self._patch_manager.patch_build_url(self._port)
-                self._patch_manager.patch_meta_enhancement(self.correct_meta)
+                self._patch_manager.patch_build_url(self.config.port)
+                if self.config.enable_correction:
+                    self._patch_manager.patch_meta_enhancement(self.correct_meta)
                 # 输出服务日志
                 self._read_process_output(process)
 
@@ -291,7 +314,11 @@ class CureTMDbAnime(_PluginBase):
         from app.utils.string import StringUtils
 
         version = SystemUtils.execute(f"{executable.as_posix()} -v")
-        result, msg = StringUtils.compare_version(version, ">=", self.binary_version, True)
+        if version == "dev":
+            return True
+        result, msg = StringUtils.compare_version(
+            version, ">=", self.binary_version, True
+        )
         if result is None:
             logger.error(f"比较版本出错：{msg}")
             return False
@@ -451,7 +478,7 @@ class CureTMDbAnime(_PluginBase):
         mapping: Dict[tuple[int, int], tuple[int, int]] = {}
 
         result = RequestUtils(timeout=2).get_json(
-            f"http://127.0.0.1:{self._port}/cache/mapping/{tmdb_id}"
+            f"http://127.0.0.1:{self.config.port}/cache/mapping/{tmdb_id}"
         )
         if not isinstance(result, dict):
             return mapping
@@ -496,7 +523,6 @@ class CureTMDbAnime(_PluginBase):
         if not meta or not mediainfo or mediainfo.type != MediaType.TV:
             return meta
 
-        # 检查识别词是否已偏移集数
         if meta.apply_words:
             matched_word = next(
                 (
@@ -512,74 +538,39 @@ class CureTMDbAnime(_PluginBase):
                 )
                 return meta
 
-        corrected = False
         tmdb_mapping = self._get_logical_mapping(mediainfo.tmdb_id)
 
-        def adjust_episode(is_begin: bool) -> bool:
-            """调整单个集数信息"""
-            episode_num = meta.begin_episode if is_begin else meta.end_episode
-            if not episode_num:
-                return False
-
-            season_num = (meta.begin_season if is_begin else meta.end_season) or 1
-
-            # TMDB 使用连续集号时
-            if result := tmdb_mapping.get((season_num, episode_num)):
-                logical_season, logical_episode = result
-                if season_num == logical_season and episode_num == logical_episode:
-                    return False
-                if is_begin:
-                    meta.begin_season = logical_season
-                    meta.begin_episode = logical_episode
-                else:
-                    meta.end_season = logical_season if meta.end_season else None
-                    meta.end_episode = logical_episode
-                return True
-
-            # TMDB 信息未更新时
-            elif (
-                mediainfo.number_of_episodes
-                and season_num == mediainfo.number_of_seasons
-                and len(mediainfo.seasons.get(season_num, []))
-                < episode_num
-                <= len(mediainfo.seasons.get(season_num, [])) + 3
-            ):
-                logger.debug(
-                    f"{mediainfo.title_year} TMDb集数信息可能未更新, 不调整元数据"
-                )
-                return False
-
-            # 发布组使用连续集号, TMDB分季时
-            elif (
-                mediainfo.number_of_episodes
-                and len(mediainfo.seasons.get(season_num, []))
-                < episode_num
-                <= mediainfo.number_of_episodes
-            ):
-                offset = 0
-                for season_key, episodes_list in mediainfo.seasons.items():
-                    if season_key == 0:  # 排除季0
-                        continue
-                    if (found_episode := episode_num - offset) in episodes_list:
-                        if is_begin:
-                            meta.begin_season = season_key
-                            meta.begin_episode = found_episode
-                        else:
-                            if meta.begin_season is None:
-                                meta.begin_season = 1
-                            if season_key != meta.begin_season:
-                                meta.end_season = season_key
-                            meta.end_episode = found_episode
-                        return True
-                    offset += len(episodes_list)
-
-            return False
-
-        # 调整 begin_episode 和 end_episode
         orig_season_episode = meta.season_episode
-        corrected = adjust_episode(True) | adjust_episode(False)
+        decision = self._adjust_service.adjust_pair(
+            begin_season=meta.begin_season,
+            begin_episode=meta.begin_episode,
+            end_season=meta.end_season,
+            end_episode=meta.end_episode,
+            tmdb_mapping=tmdb_mapping,
+            mediainfo=mediainfo,
+        )
 
-        if corrected:
+        meta.begin_season = decision.begin_season
+        meta.begin_episode = decision.begin_episode
+        meta.end_season = decision.end_season
+        meta.end_episode = decision.end_episode
+
+        if decision.end_source == "mapping_link" and meta.end_episode is not None:
+            logger.info(
+                "%s 区间联动采用映射: end -> %sx%s",
+                mediainfo.title_year,
+                decision.end_season or decision.begin_season or 1,
+                decision.end_episode,
+            )
+        elif decision.end_source == "delta_link" and meta.end_episode is not None:
+            logger.info(
+                "%s 区间联动覆盖: end -> %sx%s",
+                mediainfo.title_year,
+                decision.end_season or decision.begin_season or 1,
+                decision.end_episode,
+            )
+
+        if decision.changed:
             logger.info(
                 f"{mediainfo.title_year} {meta.org_string}：{orig_season_episode} ==> {meta.season_episode}"
             )
