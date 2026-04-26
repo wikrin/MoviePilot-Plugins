@@ -1,15 +1,18 @@
 import sys
-from typing import Callable
+from typing import Optional, Callable
 from urllib.parse import urlparse
 
 from httpx import _client, _models
 from requests.sessions import Session
 
-from app.core.context import MediaInfo
+from app.core.cache import Cache
+from app.core.config import settings
+from app.core.context import MediaInfo, TorrentInfo
 from app.chain.transfer import JobManager
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules.themoviedb.tmdbv3api.tmdb import TMDb
+from app.utils.string import StringUtils
 
 
 class MonkeyPatchManager:
@@ -19,6 +22,11 @@ class MonkeyPatchManager:
     """
 
     def __init__(self):
+
+        self.CACHE_REGION = "curetmdbanime:torrent_pubdate"
+        self.cache_backend = Cache(
+            maxsize=2 * settings.CONF.torrents, ttl=settings.CONF.meta
+        )
         # 存储已打补丁的方法的原始信息：{(target_class, method_name): original_method}
         self._original_methods = {}
         # 标记是否有任何补丁被应用
@@ -63,6 +71,38 @@ class MonkeyPatchManager:
                 return True
         return False
 
+    @staticmethod
+    def _retarget_method_filename(new_method, original_method):
+        """
+        将补丁方法的 co_filename 对齐到原始方法
+        """
+        original_func = getattr(original_method, "__func__", original_method)
+        target_filename = getattr(
+            getattr(original_func, "__code__", None), "co_filename", None
+        )
+        if not target_filename:
+            return new_method
+
+        is_static = isinstance(new_method, staticmethod)
+        is_class = isinstance(new_method, classmethod)
+        patch_func = getattr(new_method, "__func__", new_method)
+        patch_code = getattr(patch_func, "__code__", None)
+
+        if not patch_code or not hasattr(patch_code, "replace"):
+            return new_method
+
+        try:
+            patch_func.__code__ = patch_code.replace(co_filename=target_filename)
+        except Exception as e:
+            logger.debug(f"方法文件名对齐失败，保留原补丁实现: {e}")
+            return new_method
+
+        if is_static:
+            return staticmethod(patch_func)
+        if is_class:
+            return classmethod(patch_func)
+        return patch_func
+
     def patch(self, target_class, method_name: str, new_method):
         """
         通用猴子补丁。
@@ -81,7 +121,8 @@ class MonkeyPatchManager:
 
         self._original_methods[patch_key] = original_method
 
-        setattr(target_class, method_name, new_method)
+        patched_method = self._retarget_method_filename(new_method, original_method)
+        setattr(target_class, method_name, patched_method)
         logger.debug(f"方法 {target_class.__name__}.{method_name} 已补丁")
         self._is_patched = True
 
@@ -166,9 +207,91 @@ class MonkeyPatchManager:
         """
         在关键节点注入自定义元数据处理逻辑
         """
+        self.patch_torrent_info_cache()
         self.patch_job_manager(func)
         self.patch_torrent_helper(func)
         self.patch_mediainfo(func)
+
+    def patch_torrent_info_cache(self):
+        """
+        补丁 TorrentInfo 类，自动将 title/description/pubdate 的映射关系存入缓存
+        优化点：处理赋值顺序导致的重复记录问题，确保缓存键的唯一性和准确性。
+        """
+        method_name = "__setattr__"
+
+        def _make_key(title: str, desc: Optional[str]) -> str:
+            """生成统一的缓存键"""
+            return StringUtils.md5_hash(f"{title}{desc}")
+
+        def _update_cache(instance: TorrentInfo):
+            """
+            更新缓存：
+            1. 如果 title/desc 变了，删除旧的可能存在的键（清理垃圾）
+            2. 如果 title/pubdate 齐备，写入新键
+            """
+            try:
+                title = instance.__dict__.get("title")
+                desc = instance.__dict__.get("description")
+                pubdate = instance.__dict__.get("pubdate")
+
+                # 核心条件：必须有标题和发布时间
+                if not title or not pubdate:
+                    return
+
+                new_key = _make_key(title, desc)
+
+                # 检查是否已经存在相同的值，避免重复日志/IO
+                existing_val = self.cache_backend.get(new_key, region=self.CACHE_REGION)
+                if existing_val == pubdate:
+                    return
+
+                self.cache_backend.set(new_key, pubdate, region=self.CACHE_REGION)
+                logger.debug(
+                    f"[TorrentCache] Recorded: Key={new_key[:10]}... PubDate={pubdate}"
+                )
+
+            except Exception as e:
+                logger.error(f"[TorrentCache] Failed to update cache: {e}")
+
+        # 创建新的 __setattr__
+        original_setattr = getattr(TorrentInfo, method_name)
+
+        def new_setattr(instance, name: str, value: any):
+            # 执行原始赋值逻辑
+            original_setattr(instance, name, value)
+
+            # 如果修改的是关键字段，尝试更新缓存
+            if name in ["title", "description", "pubdate"]:
+                _update_cache(instance)
+
+        # 应用补丁
+        self.patch(TorrentInfo, method_name, new_setattr)
+
+    def get_torrent_pubdate(
+        self, title: Optional[str], description: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        外部查询接口：通过标题和描述获取缓存的发布时间
+        """
+        if not title:
+            return None
+
+        def _make_key(title: str, desc: Optional[str]) -> str:
+            return StringUtils.md5_hash(f"{title}{desc}")
+
+        # 优先尝试精确匹配（使用传入的描述，如果没有传则为 None/Empty）
+        key = _make_key(title, description)
+        pubdate = self.cache_backend.get(key, region=self.CACHE_REGION)
+
+        if pubdate:
+            return pubdate
+
+        # 降级策略：如果传了描述但没查到，且描述不为空，尝试查“无描述”的版本
+        if description:
+            empty_desc_key = _make_key(title, None)
+            return self.cache_backend.get(empty_desc_key, region=self.CACHE_REGION)
+
+        return None
 
     def patch_job_manager(self, func: Callable):
 
