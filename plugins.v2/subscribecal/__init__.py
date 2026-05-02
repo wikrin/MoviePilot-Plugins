@@ -184,7 +184,7 @@ class CalendarEvent(BaseModel):
     def to_ics(self) -> str:
         """转换为ics格式"""
         ics_lines = ["BEGIN:VEVENT"]
-        for attr in self.__fields__.keys():
+        for attr in CalendarEvent.model_fields.keys():
             method_name = f"_{attr}_to_ics"
             if hasattr(self, method_name):
                 method = getattr(self, method_name)
@@ -237,7 +237,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "1.2.2"
+    plugin_version = "1.3.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -433,9 +433,11 @@ class SubscribeCal(_PluginBase):
         _tmp_keys = []
         for sub in subs:
             # 跳过洗版
-            if sub.best_version: continue
+            if sub.best_version:
+                continue
             _info = self.search_sub(sub=sub, cache=cache)
-            if not _info: continue
+            if not _info:
+                continue
             key = self.media_process(sub, _info)
             if key is None:
                 continue
@@ -508,7 +510,8 @@ class SubscribeCal(_PluginBase):
         event_data = self.get_event_data(key=_key) or {}
         for epinfo in cal_info:
             # 跳过无日期剧集
-            if not epinfo.air_date: continue
+            if not epinfo.air_date:
+                continue
             cal = event_data.get(str(epinfo.id), CalendarEvent())
             # 标题
             title = f"[{epinfo.episode_number}/{total_episodes}]{title_year}" if sub.type == MediaType.TV.value else f"{title_year}"
@@ -531,7 +534,7 @@ class SubscribeCal(_PluginBase):
             cal.episode=epinfo.episode_number
             event_data[str(epinfo.id)] = cal
         # 保存事件数据
-        self.save_data(key=_key, value={k: v.dict() for k, v in event_data.items()})
+        self.save_data(key=_key, value={k: v.model_dump() for k, v in event_data.items()})
         logger.info(f"{title_year} 日历事件处理完成")
         return _key
 
@@ -546,13 +549,14 @@ class SubscribeCal(_PluginBase):
         subs = SubscribeOper().list()
         for sub in subs:
             # 跳过洗版
-            if sub.best_version: continue
+            if sub.best_version:
+                continue
             _key = self.get_sub_key(sub)
             event_data = self.get_event_data(key=_key) or {}
             for _, epinfo in event_data.items():
                 date = self.format_date_from_dtstart(epinfo.dtstart)
                 if date in date_range:
-                    timeline_items.append(TimeLineItem(**{**sub.to_dict(), **epinfo.dict()}))
+                    timeline_items.append(TimeLineItem(**{**sub.to_dict(), **epinfo.model_dump()}))
 
         return timeline_items
 
@@ -590,14 +594,14 @@ class SubscribeCal(_PluginBase):
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
         # 序列化事件数据
         for key, d in value.items():
-            data = {k: v.json() for k, v in d.items()}
+            data = {k: v.model_dump_json() for k, v in d.items()}
             self.save_data(key=key, value=data)
 
     def get_event_data(self, key: str) -> dict[str, CalendarEvent]:
         """获取日历事件数据"""
 
         _data = self.get_data(key=key) or {}
-        return {k: CalendarEvent.parse_obj(v) for k, v in _data.items()}
+        return {k: CalendarEvent.model_validate(v) for k, v in _data.items()}
 
     def get_events(self, keys: Optional[list] = None) -> Dict[str, CalendarEvent]:
         events: dict[str, CalendarEvent] = {}
