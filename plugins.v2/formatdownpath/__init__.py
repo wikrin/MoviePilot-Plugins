@@ -1,5 +1,4 @@
 import re
-import shutil
 import threading
 from abc import ABCMeta, abstractmethod
 from dataclasses import asdict, dataclass, field
@@ -7,7 +6,6 @@ from pathlib import Path
 from typing import Any, Optional, Union
 
 from apscheduler.triggers.cron import CronTrigger
-from lxml import etree
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -19,7 +17,6 @@ from app.db.downloadhistory_oper import DownloadHistoryOper, DownloadHistory, Do
 from app.db.transferhistory_oper import TransferHistoryOper
 from app.db import db_update
 from app.helper.downloader import DownloaderHelper
-from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules.filemanager.transhandler import TransHandler
 from app.modules.qbittorrent import Qbittorrent
@@ -27,9 +24,6 @@ from app.modules.transmission import Transmission
 from app.plugins import _PluginBase
 from app.schemas.types import EventType, MediaType
 from app.schemas.types import SystemConfigKey
-from app.utils.http import RequestUtils
-from app.utils.string import StringUtils
-from app.utils.system import SystemUtils
 
 
 @dataclass
@@ -244,10 +238,6 @@ class FormatDownPath(_PluginBase):
 
     # 私有属性
     _lock = threading.Lock()
-    _site_subtitle_xpath = [
-        '//td[@class="rowhead"][text()="字幕"]/following-sibling::td//a/@href',
-        '//div[contains(@class, "torrent-subtitles")]//a[contains(@href, "download")]/@href',
-    ]
 
     # 配置属性
     _cron: str = ""
@@ -348,24 +338,17 @@ class FormatDownPath(_PluginBase):
                 "description": "根据种子hash获取种子信息",
             }]
 
-    def get_command(self):
-        pass
-
     def get_page(self):
         pass
 
     def get_state(self):
         return self._event_enabled or self._cron_enabled
 
-    def on_download_added(self, **kwargs):
-        return self._event_enabled if self._event_enabled else None
-
     def get_module(self) -> dict[str, Any]:
         """
         获取插件模块声明，用于胁持系统模块实现（方法名：方法实现）
         """
         return {
-            "download_added": self.on_download_added,
             "remove_torrents": self.on_remove_torrents,
         }
 
@@ -385,9 +368,6 @@ class FormatDownPath(_PluginBase):
         if self.main(downloader=downloader, torrent_hash=torrent_hash, meta=context.meta_info, media_info=context.media_info):
             # 保存已处理数据
             self.update_data(key="processed", value={torrent_hash: downloader})
-
-        # 下载字幕
-        self.download_subtitle(context=context, torrent_hash=torrent_hash)
 
     def on_remove_torrents(self, hashs: Union[str, list], delete_file: bool = True,
                         downloader: Optional[str] = None):
@@ -682,102 +662,6 @@ class FormatDownPath(_PluginBase):
         if need_update:
             self.update_db(torrent_hash=_torrent_hash, downloadhis=downloadhis, downfiles=downfiles)
         return success, need_update
-
-    def download_subtitle(self, context: Context, torrent_hash: str):
-        """
-        添加下载任务成功后，从站点下载字幕，保存到下载目录
-        :param context:  上下文，包括识别信息、媒体信息、种子信息
-        :param torrent_hash: 种子hash
-        """
-        if not settings.DOWNLOAD_SUBTITLE:
-            return
-
-        download_history: DownloadHistory = self.downloadhis.get_by_hash(download_hash=torrent_hash)
-        if not download_history:
-            return
-
-        download_dir = Path(download_history.path)
-        # 没有详情页不处理
-        torrent = context.torrent_info
-        if not torrent.page_url:
-            return
-        # 读取网站代码
-        request = RequestUtils(cookies=torrent.site_cookie, ua=torrent.site_ua)
-        res = request.get_res(torrent.page_url)
-        if res and res.status_code == 200:
-            if not res.text:
-                logger.warn(f"读取页面代码失败：{torrent.page_url}")
-                return
-            html: etree._Element = etree.HTML(res.text)
-            try:
-                sublink_list = []
-                for xpath in self._site_subtitle_xpath:
-                    sublinks: list[str] = html.xpath(xpath)
-                    if sublinks:
-                        for sublink in sublinks:
-                            if not sublink:
-                                continue
-                            if not sublink.startswith("http"):
-                                base_url = StringUtils.get_base_url(torrent.page_url)
-                                if sublink.startswith("/"):
-                                    sublink = "%s%s" % (base_url, sublink)
-                                else:
-                                    sublink = "%s/%s" % (base_url, sublink)
-                            sublink_list.append(sublink)
-            finally:
-                if html is not None:
-                    del html
-            # 下载所有字幕文件
-            for sublink in sublink_list:
-                logger.info(f"找到字幕下载链接：{sublink}，开始下载...")
-                # 下载
-                ret = request.get_res(sublink)
-                if ret and ret.status_code == 200:
-                    # 保存ZIP
-                    file_name = TorrentHelper.get_url_filename(ret, sublink)
-                    if not file_name:
-                        logger.warn(f"链接不是字幕文件：{sublink}")
-                        continue
-                    if file_name.lower().endswith(".zip"):
-                        # ZIP包
-                        zip_file = settings.TEMP_PATH / file_name
-                        # 保存
-                        zip_file.write_bytes(ret.content)
-                        # 解压路径
-                        zip_path = zip_file.with_name(zip_file.stem)
-                        # 解压文件
-                        shutil.unpack_archive(zip_file, zip_path, format='zip')
-                        # 目录仍然不存在，则创建目录
-                        if not download_dir.exists():
-                            download_dir.mkdir(parents=True, exist_ok=True)
-                        # 遍历转移文件
-                        for sub_file in SystemUtils.list_files(zip_path, settings.RMT_SUBEXT):
-                            target_sub_file = download_dir / sub_file.name
-                            if target_sub_file.exists():
-                                logger.info(f"字幕文件已存在：{target_sub_file}")
-                                continue
-                            logger.info(f"转移字幕 {sub_file} 到 {target_sub_file} ...")
-                            SystemUtils.copy(sub_file, target_sub_file)
-                        # 删除临时文件
-                        try:
-                            shutil.rmtree(zip_path)
-                            zip_file.unlink()
-                        except Exception as err:
-                            logger.error(f"删除临时文件失败：{str(err)}")
-                    else:
-                        sub_file = settings.TEMP_PATH / file_name
-                        # 保存
-                        sub_file.write_bytes(ret.content)
-                        target_sub_file = download_dir / sub_file.name
-                        logger.info(f"转移字幕 {sub_file} 到 {target_sub_file}")
-                        SystemUtils.copy(sub_file, target_sub_file)
-                else:
-                    logger.error(f"下载字幕文件失败：{sublink}")
-                    continue
-            if sublink_list:
-                logger.info(f"{torrent.page_url} 页面字幕下载完成")
-        elif res is not None:
-            logger.warn(f"连接 {torrent.page_url} 失败，状态码：{res.status_code}")
 
     def recover_from_history(self, request: dict[str, str]):
         """
