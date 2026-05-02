@@ -704,10 +704,10 @@ vue@^3.5.13:
     "@vue/server-renderer" "3.5.33"
     "@vue/shared" "3.5.33"
 
-vuetify@3.7.3:
-  version "3.7.3"
-  resolved "https://registry.yarnpkg.com/vuetify/-/vuetify-3.7.3.tgz#0e89f7f0298d452510bcbc01b0e9b53a5ce6e883"
-  integrity sha512-bpuvBpZl1/+nLlXDgdVXekvMNR6W/ciaoa8CYlpeAzAARbY8zUFSoBq05JlLhkIHI58AnzKVy4c09d0OtfYAPg==
+vuetify@3.12.5:
+  version "3.12.5"
+  resolved "https://registry.yarnpkg.com/vuetify/-/vuetify-3.12.5.tgz#c152fff7aff04a98696983ff8207b5e890c322b6"
+  integrity sha512-Gk3eDIiBXpv+QjMTYmXXk/uvpqaSNAgprcV/Og0btBUx4saLN7AUmqUi34hRmBqu2tpype2GVvg2yxJUqP2mdg==
 
 zrender@5.6.1:
   version "5.6.1"
