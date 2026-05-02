@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@vueuse/core": "^12.4.0",
+    "@vueuse/core": "^14.0.0",
     "echarts": "^5.4.3",
     "vue": "^3.5.13",
     "vue-echarts": "^6.6.1",
