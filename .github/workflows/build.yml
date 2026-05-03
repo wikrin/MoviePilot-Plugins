@@ -16,14 +16,14 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Setup Node.js & Yarn
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Extract Plugin Paths
@@ -67,7 +67,7 @@ jobs:
 
       - name: Restore Dependencies Cache
         id: cache-deps
-        uses: actions/cache@v3
+        uses: actions/cache@v5
         with:
           path: |
             frontend/*/node_modules
