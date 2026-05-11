@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from app.chain.tmdb import TmdbChain
@@ -7,7 +8,6 @@ from app.core.meta import MetaBase
 
 from .models import (
     AdjustmentCandidate,
-    CandidateSourceKind,
     ContextMatchLevel,
     ContradictionLevel,
     DecisionRank,
@@ -74,6 +74,12 @@ def _range_looks_legal_in_context(
 
 
 class RangeDecisionEngine:
+    _KEEP_ORIGINAL_STRATEGY = "keep_original"
+    _NORMALIZE_EPISODE_RANGE_STRATEGY = "normalize_episode_range"
+    _EXPLICIT_MAPPING_STRATEGY = "explicit_mapping"
+    _ABSOLUTE_EPISODE_STRATEGY = "absolute_episode"
+    _PRODUCTION_CYCLE_STRATEGY = "production_cycle"
+
     def __init__(
         self,
         grace_episodes: int = 3,
@@ -89,9 +95,7 @@ class RangeDecisionEngine:
         candidates: list[AdjustmentCandidate] | None = None,
     ) -> RangeAdjustmentDecision:
         original_range = release_info.parsed_range
-
-        parsed_range = self._normalize_episode_range(release_info, show_context)
-        if parsed_range is None or original_range is None:
+        if original_range is None:
             raise ValueError("release_info.parsed_range 不能为空")
 
         raw_candidates = candidates or self._generate_candidates(
@@ -124,7 +128,7 @@ class RangeDecisionEngine:
         if not evaluated_candidates:
             return RangeAdjustmentDecision(
                 original_range=original_range,
-                final_range=parsed_range,
+                final_range=original_range,
                 selected_candidate=None,
                 candidates=tuple(raw_candidates),
                 rejected_candidates=tuple(rejected_candidates),
@@ -134,13 +138,13 @@ class RangeDecisionEngine:
         # 定位或构造原样候选作为比较基准
         original_candidate = self._locate_original_candidate(
             evaluated_candidates,
-            parsed_range,
+            original_range,
         )
         if original_candidate is None:
             original_candidate, original_state = self._build_virtual_original_candidate(
                 release_info=release_info,
                 show_context=show_context,
-                original_range=parsed_range,
+                original_range=original_range,
             )
             states[id(original_candidate)] = original_state
 
@@ -203,123 +207,290 @@ class RangeDecisionEngine:
         if original_range is None:
             return []
 
+        generators = (
+            self._generate_keep_original_candidates,
+            self._generate_normalize_episode_range_candidates,
+            self._generate_explicit_mapping_candidates,
+            self._generate_absolute_episode_candidates,
+            self._generate_production_cycle_candidates,
+        )
         deduped: dict[tuple[str, str], AdjustmentCandidate] = {}
+        for generator in generators:
+            for candidate in generator(release_info, show_context, original_range):
+                dedupe_key = (candidate.target_range.format(), candidate.strategy)
+                if dedupe_key not in deduped:
+                    deduped[dedupe_key] = candidate
 
-        def add_candidate(
-            strategy: str,
-            target_range: EpisodeRange,
-            reason_summary: str,
-            evidence_level: EvidenceLevel,
-            detail: str | None = None,
-        ) -> None:
-            candidate = AdjustmentCandidate(
-                original_range=original_range,
-                target_range=target_range,
-                strategy=strategy,
-                source_kind=CandidateSourceKind(strategy),
-                reasons=(reason_summary,),
-                evidences=(
-                    EvidenceItem(
-                        code=f"range.{strategy}",
-                        summary=reason_summary,
-                        level=evidence_level,
-                        detail=detail,
-                        observed_range=original_range,
-                        expected_range=target_range,
-                    ),
+        return list(deduped.values())
+
+    def _build_candidate(
+        self,
+        *,
+        original_range: EpisodeRange,
+        target_range: EpisodeRange,
+        strategy: str,
+        strategy_name: str,
+        prior_rank: DecisionRank,
+        evidence_level: EvidenceLevel,
+        reason_summary: str,
+        detail: str | None = None,
+        allow_length_change: bool = False,
+        requires_production_cycle: bool = False,
+        degrade_historical_single_update: bool = False,
+        intrinsic_evidence_kind: str | None = None,
+    ) -> AdjustmentCandidate:
+        """按统一证据格式构建候选，避免生成器重复装配元数据。"""
+        return AdjustmentCandidate(
+            original_range=original_range,
+            target_range=target_range,
+            strategy=strategy,
+            strategy_name=strategy_name,
+            prior_rank=prior_rank,
+            allow_length_change=allow_length_change,
+            requires_production_cycle=requires_production_cycle,
+            degrade_historical_single_update=degrade_historical_single_update,
+            intrinsic_evidence_kind=intrinsic_evidence_kind,
+            reasons=(reason_summary,),
+            evidences=(
+                EvidenceItem(
+                    code=f"range.{strategy}",
+                    summary=reason_summary,
+                    level=evidence_level,
+                    detail=detail,
+                    observed_range=original_range,
+                    expected_range=target_range,
                 ),
-            )
-            dedupe_key = (candidate.target_range.format(), strategy)
-            if dedupe_key not in deduped:
-                deduped[dedupe_key] = candidate
-
-        add_candidate(
-            "keep_original",
-            original_range,
-            "保留解析得到的原始范围",
-            EvidenceLevel.LOW,
+            ),
         )
 
-        if release_info.tmdb_mapping and original_range.intra_season_length is not None:
-            original_points = original_range.expand_original_points()
-            if original_points:
-                mapped_points = [
-                    release_info.tmdb_mapping.get(point) for point in original_points
-                ]
-                if all(mapped_points):
-                    add_candidate(
-                        "explicit_mapping",
-                        EpisodeRange(begin=mapped_points[0], end=mapped_points[-1]),
-                        "命中完整逐集映射",
-                        EvidenceLevel.CRITICAL,
-                        f"命中映射集数={len(mapped_points)}",
+    def _normalize_episode_range_target(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+    ) -> EpisodeRange | None:
+        """复现归一化候选目标，供生成与引擎内在证据评估共用。"""
+        if not (episode_range := release_info.parsed_range):
+            return None
+
+        if episode_range.is_single:
+            return episode_range
+
+        if episode_range.is_same_season:
+            begin_absolute_point = show_context.absolute_by_point(episode_range.begin)
+            if (
+                begin_absolute_point is not None
+                and begin_absolute_point == episode_range.end_episode
+            ):
+                logger.debug(
+                    "[%s] 生成归一化候选: %s(连续集号:%d)=%s，目标单集=%s",
+                    release_info.title,
+                    episode_range.begin.format(),
+                    begin_absolute_point,
+                    episode_range.end.format(),
+                    episode_range.begin.format(),
+                )
+                return EpisodeRange(
+                    begin=episode_range.begin,
+                    end=episode_range.begin,
+                )
+        return episode_range
+
+    def _generate_keep_original_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """保留原始解析范围。"""
+        return (
+            self._build_candidate(
+                original_range=original_range,
+                target_range=original_range,
+                strategy=self._KEEP_ORIGINAL_STRATEGY,
+                strategy_name="保留原始范围",
+                prior_rank=DecisionRank.MEDIUM,
+                evidence_level=EvidenceLevel.LOW,
+                reason_summary="保留解析得到的原始范围",
+                intrinsic_evidence_kind="keep_original",
+            ),
+        )
+
+    def _generate_normalize_episode_range_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """根据剧集上下文与发布习惯收敛原始范围。"""
+        normalized_range = self._normalize_episode_range_target(
+            release_info, show_context
+        )
+        if normalized_range is None or normalized_range == original_range:
+            return ()
+        return (
+            self._build_candidate(
+                original_range=original_range,
+                target_range=normalized_range,
+                strategy=self._NORMALIZE_EPISODE_RANGE_STRATEGY,
+                strategy_name="归一化集数范围",
+                prior_rank=DecisionRank.MEDIUM,
+                evidence_level=EvidenceLevel.HIGH,
+                reason_summary="根据剧集上下文与发布习惯收敛原始范围",
+                detail=f"原始={original_range.format()}, 归一化={normalized_range.format()}",
+                allow_length_change=True,
+                intrinsic_evidence_kind="normalize_episode_range",
+            ),
+        )
+
+    def _generate_explicit_mapping_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """使用外部 TMDB 逐集映射生成候选。"""
+        if not release_info.tmdb_mapping or original_range.intra_season_length is None:
+            return ()
+
+        candidates: list[AdjustmentCandidate] = []
+        original_points = original_range.expand_original_points()
+        if original_points:
+            mapped_points = tuple(
+                release_info.tmdb_mapping.get(point) for point in original_points
+            )
+            if all(point is not None for point in mapped_points):
+                target_points = tuple(
+                    point for point in mapped_points if point is not None
+                )
+                candidates.append(
+                    self._build_candidate(
+                        original_range=original_range,
+                        target_range=EpisodeRange(
+                            begin=target_points[0],
+                            end=target_points[-1],
+                        ),
+                        strategy=self._EXPLICIT_MAPPING_STRATEGY,
+                        strategy_name="显式逐集映射",
+                        prior_rank=DecisionRank.STRONG,
+                        evidence_level=EvidenceLevel.CRITICAL,
+                        reason_summary="命中完整逐集映射",
+                        detail=f"命中映射集数={len(mapped_points)}",
+                        intrinsic_evidence_kind="explicit_mapping",
                     )
-
-            mapped_begin = release_info.tmdb_mapping.get(original_range.begin)
-            if mapped_begin is not None:
-                inferred_end = EpisodePoint(
-                    season=mapped_begin.season,
-                    episode=mapped_begin.episode
-                    + original_range.intra_season_length
-                    - 1,
-                )
-                add_candidate(
-                    "explicit_mapping",
-                    EpisodeRange(begin=mapped_begin, end=inferred_end),
-                    "仅命中起点映射, 按范围长度推导终点",
-                    EvidenceLevel.HIGH,
-                    f"范围长度={original_range.intra_season_length}",
                 )
 
+        mapped_begin = release_info.tmdb_mapping.get(original_range.begin)
+        if mapped_begin is not None:
+            inferred_end = EpisodePoint(
+                season=mapped_begin.season,
+                episode=mapped_begin.episode + original_range.intra_season_length - 1,
+            )
+            candidates.append(
+                self._build_candidate(
+                    original_range=original_range,
+                    target_range=EpisodeRange(begin=mapped_begin, end=inferred_end),
+                    strategy=self._EXPLICIT_MAPPING_STRATEGY,
+                    strategy_name="显式逐集映射",
+                    prior_rank=DecisionRank.STRONG,
+                    evidence_level=EvidenceLevel.HIGH,
+                    reason_summary="仅命中起点映射, 按范围长度推导终点",
+                    detail=f"范围长度={original_range.intra_season_length}",
+                    intrinsic_evidence_kind="explicit_mapping",
+                )
+            )
+
+        return tuple(candidates)
+
+    def _generate_absolute_episode_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """将越过当前逻辑季上限的集号解释为全作累计集序。"""
         if original_range.intra_season_length is None:
-            return list(deduped.values())
+            return ()
 
         season_episodes = show_context.season_episodes.get(
             original_range.begin_season, []
         )
         known_max_episode = max(season_episodes) if season_episodes else None
         if (
-            known_max_episode is not None
-            and original_range.begin_episode > known_max_episode
+            known_max_episode is None
+            or original_range.begin_episode <= known_max_episode
         ):
-            begin_absolute = original_range.begin_episode
-            end_absolute = begin_absolute + original_range.intra_season_length - 1
-            target_begin = show_context.absolute_to_point.get(begin_absolute)
-            target_end = show_context.absolute_to_point.get(end_absolute)
-            if target_begin is not None and target_end is not None:
-                add_candidate(
-                    "absolute_episode",
-                    EpisodeRange(begin=target_begin, end=target_end),
-                    "原始集号超过当前逻辑季已知范围, 按全作累计集数定位目标范围",
-                    EvidenceLevel.HIGH,
-                    (
-                        f"逻辑季={original_range.begin_season}, "
-                        f"已知最大集={known_max_episode}, "
-                        f"累计集窗口={begin_absolute}-{end_absolute}"
-                    ),
-                )
+            return ()
+
+        begin_absolute = original_range.begin_episode
+        end_absolute = begin_absolute + original_range.intra_season_length - 1
+        target_begin = show_context.absolute_to_point.get(begin_absolute)
+        target_end = show_context.absolute_to_point.get(end_absolute)
+        if target_begin is None or target_end is None:
+            return ()
+
+        return (
+            self._build_candidate(
+                original_range=original_range,
+                target_range=EpisodeRange(begin=target_begin, end=target_end),
+                strategy=self._ABSOLUTE_EPISODE_STRATEGY,
+                strategy_name="累计集数定位",
+                prior_rank=DecisionRank.MEDIUM,
+                evidence_level=EvidenceLevel.HIGH,
+                reason_summary="原始集号超过当前逻辑季已知范围, 按全作累计集数定位目标范围",
+                detail=(
+                    f"逻辑季={original_range.begin_season}, "
+                    f"已知最大集={known_max_episode}, "
+                    f"累计集窗口={begin_absolute}-{end_absolute}"
+                ),
+                intrinsic_evidence_kind="absolute_episode",
+            ),
+        )
+
+    def _generate_production_cycle_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """按制作周期内相对集序生成候选。"""
+        if original_range.intra_season_length is None:
+            return ()
 
         original_points = show_context.expand_target_points(original_range)
         if original_points and all(
             show_context.contains_point(point) for point in original_points
         ):
-            return list(deduped.values())
+            return ()
 
         begin_index = original_range.begin_episode
         end_index = begin_index + original_range.intra_season_length - 1
+        candidates: list[AdjustmentCandidate] = []
         for cycle in show_context.production_cycles:
             if begin_index < 1 or end_index > len(cycle.points):
                 continue
             target_points = cycle.points[begin_index - 1 : end_index]
-            add_candidate(
-                "production_cycle",
-                EpisodeRange(begin=target_points[0], end=target_points[-1]),
-                f"按制作周期 #{cycle.cycle_id} 的相对集序生成范围",
-                EvidenceLevel.MEDIUM,
-                f"周期={cycle.cycle_id}, reason={cycle.reason}, 窗口={begin_index}-{end_index}",
+            candidates.append(
+                self._build_candidate(
+                    original_range=original_range,
+                    target_range=EpisodeRange(
+                        begin=target_points[0],
+                        end=target_points[-1],
+                    ),
+                    strategy=self._PRODUCTION_CYCLE_STRATEGY,
+                    strategy_name="制作周期定位",
+                    prior_rank=DecisionRank.WEAK,
+                    evidence_level=EvidenceLevel.MEDIUM,
+                    reason_summary=f"按制作周期 #{cycle.cycle_id} 的相对集序生成范围",
+                    detail=(
+                        f"周期={cycle.cycle_id}, reason={cycle.reason}, "
+                        f"窗口={begin_index}-{end_index}"
+                    ),
+                    requires_production_cycle=True,
+                    degrade_historical_single_update=True,
+                    intrinsic_evidence_kind="production_cycle",
+                )
             )
-
-        return list(deduped.values())
+        return tuple(candidates)
 
     def _evaluate_candidate(
         self,
@@ -330,7 +501,7 @@ class RangeDecisionEngine:
     ) -> tuple[AdjustmentCandidate, dict[str, object]]:
         """对单个候选执行门控与离散评估。"""
         candidate_label = (
-            f"策略={candidate.strategy} 来源={candidate.source_kind.value} "
+            f"策略={candidate.strategy}({candidate.strategy_display_name}) "
             f"原始={candidate.original_range.format()} 目标={candidate.target_range.format()}"
         )
         rejection_reasons = self._check_hard_constraints(
@@ -356,12 +527,8 @@ class RangeDecisionEngine:
                 for reason in rejection_reasons
             )
             return (
-                AdjustmentCandidate(
-                    original_range=candidate.original_range,
-                    target_range=candidate.target_range,
-                    strategy=candidate.strategy,
-                    source_kind=candidate.source_kind,
-                    reasons=tuple(candidate.reasons),
+                replace(
+                    candidate,
                     evidences=tuple(candidate.evidences) + rejection_evidences,
                     decision_rank=DecisionRank.REJECTED,
                 ),
@@ -442,12 +609,8 @@ class RangeDecisionEngine:
             True,
         )
 
-        evaluated = AdjustmentCandidate(
-            original_range=candidate.original_range,
-            target_range=candidate.target_range,
-            strategy=candidate.strategy,
-            source_kind=candidate.source_kind,
-            reasons=tuple(candidate.reasons),
+        evaluated = replace(
+            candidate,
             evidences=tuple(candidate.evidences)
             + self._build_score_card_evidences(
                 candidate=candidate,
@@ -499,18 +662,19 @@ class RangeDecisionEngine:
             reasons.append("目标范围逆序")
 
         # 长度一致性：防止错误映射（如单集误映射为多集）
-        original_length = show_context.range_length(candidate.original_range)
-        target_length = show_context.range_length(target_range)
-        if original_length is None:
-            original_length = self.__plain_range_length(candidate.original_range)
-        if target_length is None:
-            target_length = self.__plain_range_length(target_range)
-        if original_length is None or target_length is None:
-            reasons.append("无法可靠计算输入输出范围长度")
-        elif original_length != target_length:
-            reasons.append(
-                f"输入输出范围长度不一致: 原长度={original_length}, 目标长度={target_length}"
-            )
+        if not candidate.allow_length_change:
+            original_length = show_context.range_length(candidate.original_range)
+            target_length = show_context.range_length(target_range)
+            if original_length is None:
+                original_length = self.__plain_range_length(candidate.original_range)
+            if target_length is None:
+                target_length = self.__plain_range_length(target_range)
+            if original_length is None or target_length is None:
+                reasons.append("无法可靠计算输入输出范围长度")
+            elif original_length != target_length:
+                reasons.append(
+                    f"输入输出范围长度不一致: 原长度={original_length}, 目标长度={target_length}"
+                )
 
         for point in show_context.expand_target_points(target_range):
             if show_context.contains_point(point):
@@ -545,10 +709,7 @@ class RangeDecisionEngine:
             )
 
         # 制作周期边界检查
-        if (
-            candidate.source_kind == CandidateSourceKind.PRODUCTION_CYCLE
-            and cycle is None
-        ):
+        if candidate.requires_production_cycle and cycle is None:
             reasons.append("制作周期候选超出周期边界")
 
         return reasons
@@ -563,17 +724,8 @@ class RangeDecisionEngine:
         :param candidate: 待评估候选
         :return: `(prior_rank, reasons)`
         """
-        prior_by_source = {
-            CandidateSourceKind.KEEP_ORIGINAL: DecisionRank.MEDIUM,
-            CandidateSourceKind.EXPLICIT_MAPPING: DecisionRank.STRONG,
-            CandidateSourceKind.ABSOLUTE_EPISODE: DecisionRank.MEDIUM,
-            CandidateSourceKind.PRODUCTION_CYCLE: DecisionRank.WEAK,
-            CandidateSourceKind.UNKNOWN: DecisionRank.FALLBACK,
-        }
-        prior_rank = prior_by_source.get(candidate.source_kind, DecisionRank.FALLBACK)
-        return prior_rank, [
-            f"候选来源先验={candidate.source_kind.value}:{prior_rank.name}"
-        ]
+        prior_rank = candidate.prior_rank
+        return prior_rank, [f"候选来源先验={candidate.strategy}:{prior_rank.name}"]
 
     def _evaluate_common_context(
         self,
@@ -642,65 +794,100 @@ class RangeDecisionEngine:
         candidate: AdjustmentCandidate,
     ) -> tuple[DecisionRank, list[str]]:
         """
-        评估策略独有证据 - 针对不同策略的特定验证逻辑
+        评估策略独有证据 - 针对不同候选类型的特定验证逻辑
 
         :param release_info: 发布信息
         :param show_context: 剧集上下文
         :param candidate: 待评估候选
         :return: `(intrinsic_rank, reasons)`
         """
-        reasons: list[str] = []
+        evaluators = {
+            "keep_original": self._evaluate_keep_original_intrinsic_evidence,
+            "normalize_episode_range": (
+                self._evaluate_normalize_episode_range_intrinsic_evidence
+            ),
+            "explicit_mapping": self._evaluate_explicit_mapping_intrinsic_evidence,
+            "absolute_episode": self._evaluate_absolute_episode_intrinsic_evidence,
+            "production_cycle": self._evaluate_production_cycle_intrinsic_evidence,
+        }
+        evaluator = evaluators.get(candidate.intrinsic_evidence_kind or "")
+        if evaluator is None:
+            return DecisionRank.FALLBACK, ["未知候选缺少策略独有证据"]
+        return evaluator(release_info, show_context, candidate)
 
-        # 原样候选：检查是否在已知合法范围内
-        if candidate.source_kind == CandidateSourceKind.KEEP_ORIGINAL:
-            if _range_looks_legal_in_context(show_context, candidate.target_range):
-                reasons.append("原样候选命中已知合法范围")
-                return DecisionRank.MEDIUM, reasons
-            reasons.append("原样候选缺少已知合法性支撑")
-            return DecisionRank.FALLBACK, reasons
+    def _evaluate_keep_original_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估原样候选的内在证据。"""
+        if _range_looks_legal_in_context(show_context, candidate.target_range):
+            return DecisionRank.MEDIUM, ["原样候选命中已知合法范围"]
+        return DecisionRank.FALLBACK, ["原样候选缺少已知合法性支撑"]
 
-        # 显式映射：根据命中点数分级（≥2 → VERY_STRONG, =1 → MEDIUM）
-        if candidate.source_kind == CandidateSourceKind.EXPLICIT_MAPPING:
-            mapping_points = self._count_explicit_mapping_points(
-                candidate, release_info
-            )
-            if mapping_points >= 2:
-                reasons.append(f"显式映射完整覆盖目标范围, 命中点数={mapping_points}")
-                return DecisionRank.VERY_STRONG, reasons
-            if mapping_points == 1:
-                reasons.append("显式映射仅命中起点, 终点按长度推导")
-                return DecisionRank.MEDIUM, reasons
-            reasons.append("显式映射证据不足")
-            return DecisionRank.WEAK, reasons
+    def _evaluate_normalize_episode_range_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估归一化候选的内在证据。"""
+        normalized_range = self._normalize_episode_range_target(
+            release_info, show_context
+        )
+        if normalized_range == candidate.target_range:
+            return DecisionRank.STRONG, ["归一化规则可复现, 原始范围可收敛为目标单集"]
+        return DecisionRank.WEAK, ["归一化候选未能被当前上下文规则复现"]
 
-        # 累计集数：验证是否真正触发越界条件
-        if candidate.source_kind == CandidateSourceKind.ABSOLUTE_EPISODE:
-            known_max_episode = show_context.known_max_episode_for_original(
-                candidate.original_range.begin_season
-            )
-            if (
-                known_max_episode is not None
-                and candidate.original_range.begin_episode > known_max_episode
-            ):
-                reasons.append(
-                    f"原始集号越过当前逻辑季上限, 触发累计集数解释: 上限={known_max_episode}"
-                )
-                return DecisionRank.STRONG, reasons
-            reasons.append("累计集数候选缺少明显越界触发")
-            return DecisionRank.WEAK, reasons
+    def _evaluate_explicit_mapping_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估显式映射候选的内在证据。"""
+        mapping_points = self._count_explicit_mapping_points(candidate, release_info)
+        if mapping_points >= 2:
+            return DecisionRank.VERY_STRONG, [
+                f"显式映射完整覆盖目标范围, 命中点数={mapping_points}"
+            ]
+        if mapping_points == 1:
+            return DecisionRank.MEDIUM, ["显式映射仅命中起点, 终点按长度推导"]
+        return DecisionRank.WEAK, ["显式映射证据不足"]
 
-        # 制作周期：验证是否命中有效周期窗口
-        if candidate.source_kind == CandidateSourceKind.PRODUCTION_CYCLE:
-            cycle = show_context.production_cycle_for_range(candidate.target_range)
-            if cycle is not None:
-                reasons.append(f"目标范围命中制作周期窗口: cycle={cycle.cycle_id}")
-                return DecisionRank.MEDIUM, reasons
-            reasons.append("制作周期候选未命中有效周期窗口")
-            return DecisionRank.WEAK, reasons
+    def _evaluate_absolute_episode_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估累计集数候选的内在证据。"""
+        known_max_episode = show_context.known_max_episode_for_original(
+            candidate.original_range.begin_season
+        )
+        if (
+            known_max_episode is not None
+            and candidate.original_range.begin_episode > known_max_episode
+        ):
+            return DecisionRank.STRONG, [
+                f"原始集号越过当前逻辑季上限, 触发累计集数解释: 上限={known_max_episode}"
+            ]
+        return DecisionRank.WEAK, ["累计集数候选缺少明显越界触发"]
 
-        # 【未知策略】缺少策略独有证据，给予最低优先级
-        reasons.append("未知候选缺少策略独有证据")
-        return DecisionRank.FALLBACK, reasons
+    def _evaluate_production_cycle_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估制作周期候选的内在证据。"""
+        cycle = show_context.production_cycle_for_range(candidate.target_range)
+        if cycle is not None:
+            return DecisionRank.MEDIUM, [
+                f"目标范围命中制作周期窗口: cycle={cycle.cycle_id}"
+            ]
+        return DecisionRank.WEAK, ["制作周期候选未命中有效周期窗口"]
 
     def _evaluate_contradictions(
         self,
@@ -732,11 +919,8 @@ class RangeDecisionEngine:
         # 硬反证：低位集号（≤3）在无显式映射时禁止重映射
         if (
             candidate.changed
-            and candidate.source_kind
-            in {
-                CandidateSourceKind.ABSOLUTE_EPISODE,
-                CandidateSourceKind.PRODUCTION_CYCLE,
-            }
+            and candidate.intrinsic_evidence_kind
+            in {"absolute_episode", "production_cycle"}
             and not show_context.contains_point(candidate.original_range.begin)
             and candidate.original_range.begin_episode <= 3
         ):
@@ -746,7 +930,7 @@ class RangeDecisionEngine:
 
         # 软反证：单集更新不应映射到历史周期（除非是合集）
         if (
-            candidate.source_kind == CandidateSourceKind.PRODUCTION_CYCLE
+            candidate.degrade_historical_single_update
             and cycle is not None
             and release_info.release_date is not None
         ):
@@ -831,37 +1015,6 @@ class RangeDecisionEngine:
         else:
             rank = DecisionRank.REJECTED
         return rank, decision_score
-
-    @staticmethod
-    def _normalize_episode_range(
-        release_info: ReleaseInfo,
-        show_context: ShowContext,
-    ) -> EpisodeRange | None:
-        """根据剧集上下文与发布习惯归一化输入范围"""
-        if not (episode_range := release_info.parsed_range):
-            raise ValueError("release_info.parsed_range 不能为空")
-
-        if episode_range.is_single:
-            return episode_range
-
-        if episode_range.is_same_season:
-            begin_absolute_point = show_context.absolute_by_point(episode_range.begin)
-            if (
-                begin_absolute_point is not None
-                and begin_absolute_point == episode_range.end_episode
-            ):
-                logger.warn(
-                    "[%s] 强收敛: %s(连续集号:%d)=%s，修正为单集",
-                    release_info.title,
-                    episode_range.begin.format(),
-                    begin_absolute_point,
-                    episode_range.end.format(),
-                )
-                release_info.parsed_range = EpisodeRange(
-                    begin=episode_range.begin,
-                    end=episode_range.begin,
-                )
-        return release_info.parsed_range
 
     @staticmethod
     def _count_explicit_mapping_points(
@@ -1031,12 +1184,15 @@ class RangeDecisionEngine:
         return self._evaluate_candidate(
             release_info=release_info,
             show_context=show_context,
-            candidate=AdjustmentCandidate(
+            candidate=self._build_candidate(
                 original_range=original_range,
                 target_range=original_range,
-                strategy="keep_original",
-                source_kind=CandidateSourceKind.KEEP_ORIGINAL,
-                reasons=("虚拟原样候选，仅用于边际比较",),
+                strategy=self._KEEP_ORIGINAL_STRATEGY,
+                strategy_name="保留原始范围",
+                prior_rank=DecisionRank.MEDIUM,
+                evidence_level=EvidenceLevel.LOW,
+                reason_summary="虚拟原样候选，仅用于边际比较",
+                intrinsic_evidence_kind="keep_original",
             ),
         )
 

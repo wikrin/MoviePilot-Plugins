@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from enum import Enum, IntEnum
+from enum import IntEnum
 
 from app.core.meta.metabase import MetaBase
 
@@ -16,16 +16,6 @@ class EvidenceLevel(IntEnum):
     CRITICAL = 4
 
 
-class CandidateSourceKind(str, Enum):
-    """候选来源类别"""
-
-    KEEP_ORIGINAL = "keep_original"
-    EXPLICIT_MAPPING = "explicit_mapping"
-    ABSOLUTE_EPISODE = "absolute_episode"
-    PRODUCTION_CYCLE = "production_cycle"
-    UNKNOWN = "unknown"
-
-
 class DecisionRank(IntEnum):
     """离散决策等级，数值越大表示候选越强"""
 
@@ -35,6 +25,9 @@ class DecisionRank(IntEnum):
     MEDIUM = 3
     STRONG = 4
     VERY_STRONG = 5
+
+
+UNKNOWN_STRATEGY_KEY = "unknown"
 
 
 class ContextMatchLevel(IntEnum):
@@ -346,16 +339,33 @@ class AdjustmentCandidate:
     original_range: EpisodeRange
     # 候选目标范围
     target_range: EpisodeRange
-    # 调整策略标识
-    strategy: str = "unknown"
-    # 候选来源类别
-    source_kind: CandidateSourceKind = CandidateSourceKind.UNKNOWN
+    # 稳定可读的调整策略标识
+    strategy: str = UNKNOWN_STRATEGY_KEY
+    # 面向日志和展示的策略名称
+    strategy_name: str = "未知策略"
+    # 候选来源先验等级
+    prior_rank: DecisionRank = DecisionRank.FALLBACK
+    # 是否允许输入输出范围长度变化
+    allow_length_change: bool = False
+    # 是否依赖制作周期窗口
+    requires_production_cycle: bool = False
+    # 是否对历史单集更新候选应用软降级
+    degrade_historical_single_update: bool = False
+    # 引擎内在证据评估分支标识
+    intrinsic_evidence_kind: str | None = None
     # 候选来源/摘要列表（不承载逐层评估细节）
     reasons: tuple[str, ...] = ()
     # 候选证据列表
     evidences: tuple[EvidenceItem, ...] = ()
     # 最终决策等级
     decision_rank: DecisionRank = DecisionRank.REJECTED
+
+    @property
+    def strategy_display_name(self) -> str:
+        """
+        返回策略展示名称。
+        """
+        return self.strategy_name
 
     @property
     def changed(self) -> bool:

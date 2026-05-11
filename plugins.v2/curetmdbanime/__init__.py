@@ -1,20 +1,16 @@
 import os
-import stat
 import threading
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
-import docker
 from pydantic import BaseModel, Field
 
 from app.core.cache import cached
 from app.core.config import settings
 from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
-from app.helper.system import SystemHelper
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import MediaType
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
 
@@ -47,7 +43,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.2.0"
+    plugin_version = "2.2.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -343,6 +339,8 @@ class CureTMDbAnime(_PluginBase):
     def __fix_exec_permission(file_path: Path) -> bool:
         """修复文件可执行权限"""
         try:
+            import stat
+
             current_uid = os.getuid()
             file_stat = file_path.stat()
 
@@ -374,6 +372,9 @@ class CureTMDbAnime(_PluginBase):
         :return bool: 修复成功返回 True，否则返回 False
         """
         try:
+            import docker
+            from app.helper.system import SystemHelper
+
             # 检查是否为 Docker 环境
             if not SystemUtils.is_docker():
                 logger.error("非 Docker 环境，无法通过 Docker 守护进程修改权限")
@@ -524,7 +525,7 @@ class CureTMDbAnime(_PluginBase):
         :param meta: 原始元数据对象
         :param mediainfo: 媒体信息对象
         """
-        if not meta or not mediainfo or mediainfo.type != MediaType.TV:
+        if not meta or not mediainfo or mediainfo.type.name != "TV":
             return meta
 
         # 检查识别词是否已偏移集数
