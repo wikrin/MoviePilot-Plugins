@@ -184,6 +184,29 @@ class MonkeyPatchManager:
             _client.AsyncClient, "_transport_for_url", new_async_transport_for_url
         )
 
+    def patch_httpx_transport(self):
+        """
+        通过调用栈获取 URL，动态调整 proxy 参数
+        """
+        import app.utils.http as http_utils_module
+
+        original_get_transport = http_utils_module._get_shared_async_transport
+
+        def new_get_transport(proxy, *args, **kwargs):
+            try:
+                frame = sys._getframe(1)
+                url = frame.f_locals.get("url")
+
+                # 如果找到 URL 且需要绕过代理，强制使用无代理配置
+                if url and self._should_bypass_no_proxy_url(url):
+                    proxy = None
+            except Exception as e:
+                logger.debug(f"获取调用栈 URL 失败，使用默认代理设置: {e}")
+
+            return original_get_transport(proxy=proxy, *args, **kwargs)
+
+        self.patch(http_utils_module, "_get_shared_async_transport", new_get_transport)
+
     def patch_build_url(self, port: int):
 
         tmdb_local_url = f"http://127.0.0.1:{port}"
@@ -201,7 +224,10 @@ class MonkeyPatchManager:
         self.patch(TMDb, "_build_url", new_build_url)
 
         self.patch_requests()
-        self.patch_httpx()
+        try:
+            self.patch_httpx_transport()
+        except AttributeError:
+            self.patch_httpx()
 
     def patch_meta_enhancement(self, func: Callable):
         """
