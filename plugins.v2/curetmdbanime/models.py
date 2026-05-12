@@ -8,44 +8,109 @@ from app.core.meta.metabase import MetaBase
 
 
 class EvidenceLevel(IntEnum):
-    """证据强度等级，数值越大表示信息越强"""
+    """证据强度等级 - 用于标记候选策略的证据可信度"""
 
+    # 低强度：基础解析结果
     LOW = 1
+    # 中等强度：部分上下文支撑
     MEDIUM = 2
+    # 高强度：明确的规则匹配
     HIGH = 3
+    # 关键证据：外部映射或强特征
     CRITICAL = 4
 
 
 class DecisionRank(IntEnum):
-    """离散决策等级，数值越大表示候选越强"""
+    """决策等级 - 表示候选的最终强弱程度"""
 
+    # 拒绝：不满足硬约束
     REJECTED = 0
+    # 回退：勉强可用
     FALLBACK = 1
+    # 弱：证据不足
     WEAK = 2
+    # 中：一般可信
     MEDIUM = 3
+    # 强：较强证据支撑
     STRONG = 4
+    # 极强：多重强证据
     VERY_STRONG = 5
 
 
-UNKNOWN_STRATEGY_KEY = "unknown"
-
-
 class ContextMatchLevel(IntEnum):
-    """通用上下文匹配等级"""
+    """上下文匹配等级 - 描述候选与已知剧集上下文的匹配程度"""
 
+    # 强冲突：严重不符
     STRONG_CONFLICT = -2
+    # 冲突：存在矛盾
     CONFLICT = -1
+    # 中立：无明显倾向
     NEUTRAL = 0
+    # 匹配：基本一致
     MATCH = 1
+    # 强匹配：高度吻合
     STRONG_MATCH = 2
 
 
 class ContradictionLevel(IntEnum):
-    """反证强度等级"""
+    """反证等级 - 标识候选是否存在矛盾证据"""
 
+    # 无反证：无冲突证据
     NONE = 0
+    # 软性反证：轻微矛盾，可降级
     SOFT = 1
+    # 硬性反证：严重矛盾，阻断改写
     HARD = 2
+
+
+@dataclass(frozen=True)
+class ContextScoreCard:
+    """上下文事实评分卡，覆盖质量在这里统一表达。"""
+
+    # 匹配等级
+    level: ContextMatchLevel
+    # 上下文得分
+    score: int
+    # 评估原因列表
+    reasons: tuple[str, ...]
+    # 总覆盖集数
+    coverage_total: int = 0
+    # 命中集数
+    coverage_hits: int = 0
+    # 宽限集数
+    coverage_grace: int = 0
+    # 覆盖率
+    coverage_ratio: float = 0.0
+    # 是否连续
+    coverage_contiguous: bool = False
+    # 是否存在歧义
+    coverage_ambiguous: bool = False
+
+
+@dataclass(frozen=True)
+class StrategyScoreCard:
+    """策略解释评分卡，描述候选生成理由本身是否站得住。"""
+
+    # 策略等级
+    rank: DecisionRank
+    # 策略得分
+    score: int
+    # 评估原因列表
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PenaltyScoreCard:
+    """软硬反证评分卡，统一进入最终总分。"""
+
+    # 反证等级
+    level: ContradictionLevel
+    # 惩罚分数
+    score: int
+    # 反证原因列表
+    reasons: tuple[str, ...]
+    # 是否阻断改写
+    blocked: bool = False
 
 
 @dataclass(frozen=True, order=True)
@@ -340,7 +405,7 @@ class AdjustmentCandidate:
     # 候选目标范围
     target_range: EpisodeRange
     # 稳定可读的调整策略标识
-    strategy: str = UNKNOWN_STRATEGY_KEY
+    strategy: str = "unknown"
     # 面向日志和展示的策略名称
     strategy_name: str = "未知策略"
     # 候选来源先验等级

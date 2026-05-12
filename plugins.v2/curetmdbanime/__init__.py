@@ -1,7 +1,7 @@
 import os
 import threading
 from pathlib import Path
-from typing import Any, Optional, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -25,8 +25,8 @@ class CureTMDbAnimeConfig(BaseModel):
     enable_correction: bool = Field(default=True)
     # 最新季允许的越界宽限集数
     grace_episodes: int = Field(default=2, ge=0, le=5)
-    # 离散等级差
-    rewrite_margin: int = Field(default=2, ge=0, le=4)
+    # 改写所需的最小总分优势（避免噪声触发改写）
+    rewrite_threshold: int = Field(default=16, ge=0, le=40)
     # 远程数据源地址
     source: Optional[str] = Field(
         default="https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
@@ -78,7 +78,7 @@ class CureTMDbAnime(_PluginBase):
         # 初始化
         self.meta_correction_use_case = MetaCorrectionUseCase(
             grace_episodes=self.config.grace_episodes,
-            rewrite_margin=self.config.rewrite_margin,
+            rewrite_threshold=self.config.rewrite_threshold,
         )
 
         # 在单独线程中运行 CureTMDbAnime 服务
@@ -187,12 +187,12 @@ class CureTMDbAnime(_PluginBase):
                                     {
                                         "component": "VTextField",
                                         "props": {
-                                            "model": "rewrite_margin",
-                                            "label": "离散等级差",
+                                            "model": "rewrite_threshold",
+                                            "label": "改写阈值",
                                             "type": "number",
                                             "min": 0,
-                                            "max": 4,
-                                            "step": 1,
+                                            "max": 40,
+                                            "step": 2,
                                         },
                                     }
                                 ],

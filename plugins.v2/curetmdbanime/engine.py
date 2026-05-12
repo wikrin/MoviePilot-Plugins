@@ -1,24 +1,29 @@
+from __future__ import annotations
+
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from app.chain.tmdb import TmdbChain
-from app.log import logger
 from app.core.context import MediaInfo
 from app.core.meta import MetaBase
+from app.log import logger
 
 from .models import (
     AdjustmentCandidate,
     ContextMatchLevel,
+    ContextScoreCard,
     ContradictionLevel,
     DecisionRank,
     EpisodePoint,
     EpisodeRange,
     EvidenceItem,
     EvidenceLevel,
+    PenaltyScoreCard,
     ProductionCycle,
     RangeAdjustmentDecision,
     ReleaseInfo,
     ShowContext,
+    StrategyScoreCard,
 )
 
 
@@ -83,10 +88,10 @@ class RangeDecisionEngine:
     def __init__(
         self,
         grace_episodes: int = 3,
-        rewrite_margin: int = 1,
+        rewrite_threshold: int = 16,
     ) -> None:
         self.grace_episodes = grace_episodes
-        self.rewrite_margin = rewrite_margin
+        self.rewrite_threshold = rewrite_threshold
 
     def decide(
         self,
@@ -148,7 +153,7 @@ class RangeDecisionEngine:
             )
             states[id(original_candidate)] = original_state
 
-        # 计算相对原样的胜出边际并排序
+        # 最终选择、排序和边际都只读取同一个总分，避免多套强弱公式冲突
         scored_candidates = self._apply_margin_against_original(
             candidates=evaluated_candidates,
             original_candidate=original_candidate,
@@ -167,8 +172,10 @@ class RangeDecisionEngine:
                     f"#{idx + 1} 策略={candidate.strategy} "
                     f"目标={candidate.target_range.format()} "
                     f"等级={candidate.decision_rank.name} "
-                    f"上下文={states[id(candidate)]['context_level'].name} "
-                    f"反证={states[id(candidate)]['contradiction_level'].name} "
+                    f"总分={states[id(candidate)]['decision_score']} "
+                    f"上下文分={states[id(candidate)]['context_score']} "
+                    f"策略分={states[id(candidate)]['strategy_score']} "
+                    f"惩罚={states[id(candidate)]['penalty_score']} "
                     f"边际={states[id(candidate)]['margin_against_original']}"
                 )
                 for idx, candidate in enumerate(scored_candidates[:5])
@@ -538,6 +545,14 @@ class RangeDecisionEngine:
                     "contradiction_level": ContradictionLevel.HARD,
                     "blocked": True,
                     "decision_score": 0,
+                    "context_score": 0,
+                    "strategy_score": 0,
+                    "prior_score": 0,
+                    "penalty_score": 0,
+                    "coverage_total": 0,
+                    "coverage_hits": 0,
+                    "coverage_grace": 0,
+                    "coverage_ratio": 0.0,
                     "prior_rank": DecisionRank.REJECTED,
                     "intrinsic_rank": DecisionRank.REJECTED,
                     "margin_against_original": 0,
@@ -552,29 +567,41 @@ class RangeDecisionEngine:
             prior_rank.name,
             "；".join(prior_reasons),
         )
-        context_level, context_reasons = self._evaluate_common_context(
+        context_card = self._evaluate_common_context(
             release_info,
             show_context,
             candidate,
         )
         logger.debug(
-            "%s [候选评估] %s context=%s details=%s",
+            "%s [候选评估] %s context=%s score=%s coverage=%s/%s(%.1f%%) grace=%s continuous=%s ambiguous=%s details=%s",
             release_info.title,
             candidate_label,
-            context_level.name,
-            "；".join(context_reasons),
+            context_card.level.name,
+            context_card.score,
+            context_card.coverage_hits,
+            context_card.coverage_total,
+            context_card.coverage_ratio * 100,
+            context_card.coverage_grace,
+            context_card.coverage_contiguous,
+            context_card.coverage_ambiguous,
+            "；".join(context_card.reasons),
         )
         intrinsic_rank, intrinsic_reasons = self._evaluate_intrinsic_evidence(
             release_info,
             show_context,
             candidate,
         )
+        strategy_card = self._build_strategy_score_card(
+            intrinsic_rank,
+            intrinsic_reasons,
+        )
         logger.debug(
-            "%s [候选评估] %s intrinsic=%s details=%s",
+            "%s [候选评估] %s intrinsic=%s score=%s details=%s",
             release_info.title,
             candidate_label,
-            intrinsic_rank.name,
-            "；".join(intrinsic_reasons),
+            strategy_card.rank.name,
+            strategy_card.score,
+            "；".join(strategy_card.reasons),
         )
         contradiction_level, contradiction_reasons, blocked = (
             self._evaluate_contradictions(
@@ -583,29 +610,38 @@ class RangeDecisionEngine:
                 candidate,
             )
         )
+        penalty_card = self._build_penalty_score_card(
+            contradiction_level,
+            contradiction_reasons,
+            blocked,
+        )
         logger.debug(
-            "%s [候选评估] %s contradiction=%s blocked=%s details=%s",
+            "%s [候选评估] %s contradiction=%s penalty=%s blocked=%s details=%s",
             release_info.title,
             candidate_label,
-            contradiction_level.name,
-            blocked,
-            "；".join(contradiction_reasons),
+            penalty_card.level.name,
+            penalty_card.score,
+            penalty_card.blocked,
+            "；".join(penalty_card.reasons),
         )
         decision_rank, decision_score = self._compose_decision_rank(
             candidate=candidate,
             prior_rank=prior_rank,
-            context_level=context_level,
-            intrinsic_rank=intrinsic_rank,
-            contradiction_level=contradiction_level,
-            blocked_by_contradiction=blocked,
+            context_card=context_card,
+            strategy_card=strategy_card,
+            penalty_card=penalty_card,
         )
         logger.debug(
-            "%s [候选评估] %s final rank=%s score=%s blocked=%s feasible=%s",
+            "%s [候选评估] %s final rank=%s score=%s context=%s strategy=%s prior=%s penalty=%s blocked=%s feasible=%s",
             release_info.title,
             candidate_label,
             decision_rank.name,
             decision_score,
-            blocked,
+            context_card.score,
+            strategy_card.score,
+            self._prior_score(prior_rank),
+            penalty_card.score,
+            penalty_card.blocked,
             True,
         )
 
@@ -614,9 +650,8 @@ class RangeDecisionEngine:
             evidences=tuple(candidate.evidences)
             + self._build_score_card_evidences(
                 candidate=candidate,
-                context_level=context_level,
-                contradiction_level=contradiction_level,
-                blocked_by_contradiction=blocked,
+                context_card=context_card,
+                penalty_card=penalty_card,
                 decision_rank=decision_rank,
             ),
             decision_rank=decision_rank,
@@ -625,12 +660,20 @@ class RangeDecisionEngine:
             evaluated,
             {
                 "feasible": True,
-                "context_level": context_level,
-                "contradiction_level": contradiction_level,
-                "blocked": blocked,
+                "context_level": context_card.level,
+                "contradiction_level": penalty_card.level,
+                "blocked": penalty_card.blocked,
                 "decision_score": decision_score,
+                "context_score": context_card.score,
+                "strategy_score": strategy_card.score,
+                "prior_score": self._prior_score(prior_rank),
+                "penalty_score": penalty_card.score,
+                "coverage_total": context_card.coverage_total,
+                "coverage_hits": context_card.coverage_hits,
+                "coverage_grace": context_card.coverage_grace,
+                "coverage_ratio": context_card.coverage_ratio,
                 "prior_rank": prior_rank,
-                "intrinsic_rank": intrinsic_rank,
+                "intrinsic_rank": strategy_card.rank,
                 "margin_against_original": 0,
             },
         )
@@ -732,60 +775,199 @@ class RangeDecisionEngine:
         release_info: ReleaseInfo,
         show_context: ShowContext,
         candidate: AdjustmentCandidate,
-    ) -> tuple[ContextMatchLevel, list[str]]:
+    ) -> ContextScoreCard:
         """
-        评估通用上下文 - 标题年份和发布时间与目标周期的匹配度（投票机制）
+        评估上下文事实 - 时间、周期和范围覆盖共同决定候选是否符合当前作品事实
 
         :param release_info: 发布信息
         :param show_context: 剧集上下文
         :param candidate: 待评估候选
-        :return: `(context_level, reasons)`
+        :return: 上下文事实评分卡
         """
         reasons: list[str] = []
         cycle = show_context.production_cycle_for_range(candidate.target_range)
-        if cycle is None:
-            reasons.append("目标范围无可用制作周期信息, 通用上下文为 NEUTRAL")
-            return ContextMatchLevel.NEUTRAL, reasons
+        score = 0
 
-        match_votes = 0
-        conflict_votes = 0
+        if cycle is None:
+            reasons.append("目标范围无可用制作周期信息")
+            score -= 4
+        else:
+            # 周期是作品事实的一部分：完整落在同一周期比单纯日期匹配更可靠。
+            reasons.append(f"目标范围完整落在制作周期: cycle={cycle.cycle_id}")
+            score += 6
 
         # 标题年份匹配
         year_signal = self._title_year_signal(release_info, cycle)
         if year_signal > 0:
-            match_votes += 1
             reasons.append("标题年份与目标周期起始年份匹配")
+            score += 8
         elif year_signal < 0:
-            conflict_votes += 1
             reasons.append("标题年份与目标周期起始年份冲突")
+            score -= 10
         else:
             reasons.append("标题年份缺失或不足以判断")
 
         # 发布时间窗口匹配
         release_signal = self._release_date_signal(release_info, show_context, cycle)
         if release_signal > 0:
-            match_votes += 1
             reasons.append("发布时间与目标周期窗口匹配")
+            score += 8
         elif release_signal < 0:
-            conflict_votes += 1
             reasons.append("发布时间与目标周期窗口冲突")
+            score -= 10
         else:
             reasons.append("发布时间缺失或不足以判断")
 
-        # 根据投票结果确定等级
-        if conflict_votes >= 2:
-            return ContextMatchLevel.STRONG_CONFLICT, reasons
-        # 单冲突无匹配 → CONFLICT（否定信号）
-        if conflict_votes == 1 and match_votes == 0:
-            return ContextMatchLevel.CONFLICT, reasons
-        # 双匹配 → STRONG_MATCH（最强肯定信号）
-        if match_votes >= 2:
-            return ContextMatchLevel.STRONG_MATCH, reasons
-        # 单匹配无冲突 → MATCH（肯定信号）
-        if match_votes == 1 and conflict_votes == 0:
-            return ContextMatchLevel.MATCH, reasons
-        # 其他情况（如一匹配一冲突、或都缺失）→ NEUTRAL（中性）
-        return ContextMatchLevel.NEUTRAL, reasons
+        coverage_score, coverage_reasons, coverage_stats = (
+            self._evaluate_coverage_context(
+                release_info,
+                show_context,
+                candidate,
+            )
+        )
+        score += coverage_score
+        reasons.extend(coverage_reasons)
+
+        return ContextScoreCard(
+            level=self._context_level_from_score(score),
+            score=score,
+            reasons=tuple(reasons),
+            coverage_total=coverage_stats["total"],
+            coverage_hits=coverage_stats["hits"],
+            coverage_grace=coverage_stats["grace"],
+            coverage_ratio=coverage_stats["ratio"],
+            coverage_contiguous=coverage_stats["contiguous"],
+            coverage_ambiguous=coverage_stats["ambiguous"],
+        )
+
+    def _evaluate_coverage_context(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[int, list[str], dict[str, object]]:
+        """
+        评估范围覆盖质量。
+
+        覆盖分属于上下文事实层，因为它验证的是候选目标能否被 TMDB
+        当前作品事实解释，而不是某个策略自身的来源可信度。
+        """
+        target_points = show_context.expand_target_points(candidate.target_range)
+        total = len(target_points)
+        hit_points = tuple(
+            point for point in target_points if show_context.contains_point(point)
+        )
+        grace_points = tuple(
+            point
+            for point in target_points
+            if not show_context.contains_point(point)
+            and show_context.is_latest_season_grace_point(point, self.grace_episodes)
+        )
+        missing_count = total - len(hit_points) - len(grace_points)
+        ratio = len(hit_points) / total if total else 0.0
+        contiguous = _range_is_absolute_contiguous(
+            show_context,
+            candidate.target_range,
+            self.grace_episodes,
+        )
+        ambiguous = self._has_absolute_episode_range_ambiguity(
+            release_info,
+            show_context,
+            candidate,
+        )
+
+        reasons: list[str] = [
+            (
+                "覆盖统计: "
+                f"命中={len(hit_points)}/{total}, "
+                f"命中率={ratio:.1%}, 宽限缺失={len(grace_points)}, "
+                f"非宽限缺失={missing_count}, 连续={contiguous}"
+            )
+        ]
+
+        if total == 0:
+            return (
+                -12,
+                reasons + ["目标范围无法展开, 覆盖事实不足"],
+                {
+                    "total": total,
+                    "hits": len(hit_points),
+                    "grace": len(grace_points),
+                    "ratio": ratio,
+                    "contiguous": contiguous,
+                    "ambiguous": ambiguous,
+                },
+            )
+
+        # 覆盖数量只奖励已真实存在的点；宽限点只表示暂不拒绝，不能制造强证据。
+        hit_count = len(hit_points)
+        if hit_count >= 13:
+            count_score = 30
+            reasons.append("覆盖数量达到 13 集以上完整命中分段, 应强于单集解释")
+        elif hit_count >= 6:
+            count_score = 22
+            reasons.append("覆盖数量达到 6-12 集命中分段")
+        elif hit_count >= 2:
+            count_score = 14
+            reasons.append("覆盖数量达到 2-5 集命中分段")
+        elif hit_count == 1:
+            count_score = 8
+            reasons.append("单集正确落点, 给予基础正向覆盖分")
+        else:
+            count_score = -8
+            reasons.append("没有真实命中点, 覆盖事实不足")
+
+        if ratio == 1:
+            ratio_score = 8
+            reasons.append("覆盖比例 100%, 完整命中")
+        elif ratio >= 0.9 and missing_count == 0:
+            ratio_score = 2
+            reasons.append("覆盖比例 >=90% 且缺失都在最新季宽限区")
+        elif ratio >= 0.7:
+            ratio_score = -4
+            reasons.append("覆盖比例 70%-90%, 覆盖事实不完整")
+        else:
+            ratio_score = -14
+            reasons.append("覆盖比例低于 70%, 覆盖事实明显不足")
+
+        contiguous_score = 4 if contiguous else -12
+        if contiguous:
+            reasons.append("目标范围在累计集序上连续")
+        else:
+            reasons.append("目标范围在累计集序上不连续")
+
+        coverage_score = count_score + ratio_score + contiguous_score
+
+        if grace_points:
+            coverage_score -= min(len(grace_points) * 2, 6)
+            reasons.append("宽限区缺失只允许通过, 不计入强覆盖奖励")
+
+        if missing_count > 0:
+            coverage_score -= 20
+            reasons.append("存在非宽限缺失点, 覆盖分强扣减")
+
+        if (
+            ambiguous
+            and not candidate.changed
+            and candidate.target_range.begin_episode != 1
+        ):
+            # 05(77) 类结构通常不是从 E01 开始；完整季度包也可能满足同样的
+            # 累计序号等式，因此只限制非首集起始的原样范围，避免误伤季度合集。
+            coverage_score = min(coverage_score, 10)
+            reasons.append("命中逻辑集号+累计编号结构, 原样覆盖奖励封顶")
+
+        return (
+            coverage_score,
+            reasons,
+            {
+                "total": total,
+                "hits": hit_count,
+                "grace": len(grace_points),
+                "ratio": ratio,
+                "contiguous": contiguous,
+                "ambiguous": ambiguous,
+            },
+        )
 
     def _evaluate_intrinsic_evidence(
         self,
@@ -956,65 +1138,128 @@ class RangeDecisionEngine:
         *,
         candidate: AdjustmentCandidate,
         prior_rank: DecisionRank,
-        context_level: ContextMatchLevel,
-        intrinsic_rank: DecisionRank,
-        contradiction_level: ContradictionLevel,
-        blocked_by_contradiction: bool,
+        context_card: ContextScoreCard,
+        strategy_card: StrategyScoreCard,
+        penalty_card: PenaltyScoreCard,
     ) -> tuple[DecisionRank, int]:
         """
-        组合四层评估结果形成离散决策等级
+        组合四层评估结果形成统一总分
 
         :param candidate: 候选对象
         :param prior_rank: 来源先验等级
-        :param context_level: 通用上下文等级
-        :param intrinsic_rank: 独有证据等级
-        :param contradiction_level: 反证等级
-        :param blocked_by_contradiction: 是否被反证阻止改写
+        :param context_card: 上下文事实评分卡
+        :param strategy_card: 策略解释评分卡
+        :param penalty_card: 反证惩罚评分卡
         :return: `(decision_rank, decision_score)`
         """
-        # 被强反证阻止的改写候选直接降级
-        if blocked_by_contradiction and candidate.changed:
-            return DecisionRank.FALLBACK, 10
-
-        # 分层加权：来源先验(×10) > 独有证据(×8) + 上下文调整 + 反证惩罚 + 原样bonus
-        base_score = prior_rank * 10 + intrinsic_rank * 8
-
-        # 根据标题年份和发布时间与目标周期的匹配程度进行加减分
-        context_delta = {
-            ContextMatchLevel.STRONG_CONFLICT: -18,
-            ContextMatchLevel.CONFLICT: -8,
-            ContextMatchLevel.NEUTRAL: 0,
-            ContextMatchLevel.MATCH: 8,
-            ContextMatchLevel.STRONG_MATCH: 16,
-        }[context_level]
-
-        # 反证惩罚：硬反证 -20（强力阻止），软反证 -8（适度降级）
-        contradiction_delta = {
-            ContradictionLevel.NONE: 0,
-            ContradictionLevel.SOFT: -8,
-            ContradictionLevel.HARD: -20,
-        }[contradiction_level]
-
-        # 原样候选保守性加分：如果未发生改写，额外 +4 分
-        keep_original_bonus = 4 if not candidate.changed else 0
+        # 来源先验只做小权重微调；真正主导胜负的是事实分和策略解释分
+        keep_original_bonus = 6 if not candidate.changed else 0
         decision_score = (
-            base_score + context_delta + contradiction_delta + keep_original_bonus
+            context_card.score
+            + strategy_card.score
+            + self._prior_score(prior_rank)
+            + keep_original_bonus
+            + penalty_card.score
         )
 
+        # 强反证不再另起一套排序公式，而是通过统一总分降级并由 blocked 控制改写
+        if penalty_card.blocked and candidate.changed:
+            decision_score = min(decision_score, 20)
+
         # 根据总分划分离散等级
-        if decision_score >= 88:
+        if decision_score >= 95:
             rank = DecisionRank.VERY_STRONG
-        elif decision_score >= 68:
+        elif decision_score >= 72:
             rank = DecisionRank.STRONG
-        elif decision_score >= 50:
+        elif decision_score >= 48:
             rank = DecisionRank.MEDIUM
-        elif decision_score >= 32:
+        elif decision_score >= 26:
             rank = DecisionRank.WEAK
         elif decision_score > 0:
             rank = DecisionRank.FALLBACK
         else:
             rank = DecisionRank.REJECTED
         return rank, decision_score
+
+    @staticmethod
+    def _prior_score(prior_rank: DecisionRank) -> int:
+        """
+        先验只表示策略来源的默认可信度，不能压过上下文事实中的覆盖质量
+        """
+        return int(prior_rank) * 2
+
+    @staticmethod
+    def _build_strategy_score_card(
+        intrinsic_rank: DecisionRank,
+        intrinsic_reasons: list[str],
+    ) -> StrategyScoreCard:
+        """把策略解释等级转换为统一总分中的策略分。"""
+        return StrategyScoreCard(
+            rank=intrinsic_rank,
+            score=int(intrinsic_rank) * 7,
+            reasons=tuple(intrinsic_reasons),
+        )
+
+    @staticmethod
+    def _build_penalty_score_card(
+        contradiction_level: ContradictionLevel,
+        contradiction_reasons: list[str],
+        blocked: bool,
+    ) -> PenaltyScoreCard:
+        """把软硬反证转换为统一总分惩罚。"""
+        penalty_score = {
+            ContradictionLevel.NONE: 0,
+            ContradictionLevel.SOFT: -12,
+            ContradictionLevel.HARD: -34,
+        }[contradiction_level]
+        return PenaltyScoreCard(
+            level=contradiction_level,
+            score=penalty_score,
+            reasons=tuple(contradiction_reasons),
+            blocked=blocked,
+        )
+
+    @staticmethod
+    def _context_level_from_score(score: int) -> ContextMatchLevel:
+        """将上下文事实细分分兼容映射回旧的离散等级。"""
+        if score >= 40:
+            return ContextMatchLevel.STRONG_MATCH
+        if score >= 18:
+            return ContextMatchLevel.MATCH
+        if score <= -24:
+            return ContextMatchLevel.STRONG_CONFLICT
+        if score <= -8:
+            return ContextMatchLevel.CONFLICT
+        return ContextMatchLevel.NEUTRAL
+
+    def _has_absolute_episode_range_ambiguity(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> bool:
+        """
+        判断是否命中“逻辑集号 + 累计编号”的结构歧义
+
+        该判断只依赖季集结构，不读取标题关键词
+        误当成长范围合集来保护。
+        """
+        original_range = release_info.parsed_range
+        if original_range is None or not original_range.is_same_season:
+            return False
+        begin_absolute = show_context.absolute_by_point(original_range.begin)
+        if begin_absolute is None or begin_absolute != original_range.end_episode:
+            return False
+        normalized_range = self._normalize_episode_range_target(
+            release_info,
+            show_context,
+        )
+        return bool(
+            normalized_range is not None
+            and normalized_range.is_single
+            and normalized_range.begin == original_range.begin
+            and candidate.target_range == original_range
+        )
 
     @staticmethod
     def _count_explicit_mapping_points(
@@ -1105,29 +1350,27 @@ class RangeDecisionEngine:
         candidate: AdjustmentCandidate,
         states: dict[int, dict[str, object]],
     ) -> int:
-        """计算候选强度用于边际比较：decision_rank×10 + context×3 - contradiction×4 + 原样bonus"""
-        state = states[id(candidate)]
-        return (
-            int(candidate.decision_rank) * 10
-            + int(state["context_level"]) * 3
-            - int(state["contradiction_level"]) * 4
-            + (1 if not candidate.changed else 0)
-        )
+        """计算候选强度用于边际比较：直接使用统一总分。"""
+        return int(states[id(candidate)]["decision_score"])
 
     def _build_score_card_evidences(
         self,
         *,
         candidate: AdjustmentCandidate,
-        context_level: ContextMatchLevel,
-        contradiction_level: ContradictionLevel,
-        blocked_by_contradiction: bool,
+        context_card: ContextScoreCard,
+        penalty_card: PenaltyScoreCard,
         decision_rank: DecisionRank,
     ) -> tuple[EvidenceItem, ...]:
         """将离散评估结果补充为可读证据。"""
         evidences = [
             EvidenceItem(
                 code="decision.context",
-                summary=f"通用上下文等级={context_level.name}",
+                summary=(
+                    f"上下文事实等级={context_card.level.name}, "
+                    f"分数={context_card.score}, "
+                    f"覆盖={context_card.coverage_hits}/{context_card.coverage_total}, "
+                    f"命中率={context_card.coverage_ratio:.1%}"
+                ),
                 level=EvidenceLevel.MEDIUM,
                 observed_range=candidate.original_range,
                 expected_range=candidate.target_range,
@@ -1140,17 +1383,17 @@ class RangeDecisionEngine:
                 expected_range=candidate.target_range,
             ),
         ]
-        if contradiction_level != ContradictionLevel.NONE:
+        if penalty_card.level != ContradictionLevel.NONE:
             evidences.append(
                 EvidenceItem(
                     code="decision.contradiction",
-                    summary=f"反证等级={contradiction_level.name}",
+                    summary=f"反证等级={penalty_card.level.name}, 惩罚={penalty_card.score}",
                     level=EvidenceLevel.HIGH,
                     observed_range=candidate.original_range,
                     expected_range=candidate.target_range,
                 )
             )
-        if blocked_by_contradiction:
+        if penalty_card.blocked:
             evidences.append(
                 EvidenceItem(
                     code="decision.blocked",
@@ -1252,11 +1495,11 @@ class RangeDecisionEngine:
             )
             return original_candidate, reasons
 
-        if states[id(best_rewrite)]["margin_against_original"] < self.rewrite_margin:
+        if states[id(best_rewrite)]["margin_against_original"] < self.rewrite_threshold:
             reasons.append(
                 (
                     "原样范围通过最终采用条件，最佳改写候选未达到改写边际阈值，保持原样；"
-                    f"要求边际>={self.rewrite_margin}，"
+                    f"要求总分优势>={self.rewrite_threshold}，"
                     f"实际={states[id(best_rewrite)]['margin_against_original']}"
                 )
             )
@@ -1277,17 +1520,16 @@ class RangeDecisionEngine:
         self,
         candidate: AdjustmentCandidate,
         states: dict[int, dict[str, object]],
-    ) -> tuple[int, int, int, int, int, int, int]:
-        """七层排序优先级：反证阻止 > 上下文 > 决策等级 > 来源先验 > 独有证据 > 边际 > 原样优先。"""
+    ) -> tuple[int, int, int, int, int, int]:
+        """排序优先级：可采用性优先，其余统一围绕总分和少量平局项。"""
         state = states[id(candidate)]
         return (
             0 if state["blocked"] and candidate.changed else 1,
-            int(state["context_level"]),
+            int(state["decision_score"]),
             int(candidate.decision_rank),
-            int(state["prior_rank"]),
-            int(state["intrinsic_rank"]),
-            int(state["margin_against_original"]),
+            1 if candidate.strategy == self._EXPLICIT_MAPPING_STRATEGY else 0,
             1 if not candidate.changed else 0,
+            int(state["coverage_hits"]),
         )
 
     @staticmethod
@@ -1341,15 +1583,15 @@ class MetaCorrectionUseCase:
         self,
         *,
         grace_episodes: int = 3,
-        rewrite_margin: int = 1,
+        rewrite_threshold: int = 16,
         decision_engine: RangeDecisionEngine | None = None,
     ) -> None:
         self.decision_engine = decision_engine or RangeDecisionEngine(
             grace_episodes=grace_episodes,
-            rewrite_margin=rewrite_margin,
+            rewrite_threshold=rewrite_threshold,
         )
         self.grace_episodes = grace_episodes
-        self.rewrite_margin = rewrite_margin
+        self.rewrite_threshold = rewrite_threshold
 
     def correct(
         self,
