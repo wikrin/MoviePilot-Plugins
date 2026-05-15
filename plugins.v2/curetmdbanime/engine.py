@@ -169,7 +169,7 @@ class RangeDecisionEngine:
             release_info.title,
             " | ".join(
                 (
-                    f"#{idx + 1} 策略={candidate.strategy} "
+                    f"#{idx + 1} 策略={candidate.strategy_name} "
                     f"目标={candidate.target_range.format()} "
                     f"等级={candidate.decision_rank.name} "
                     f"总分={states[id(candidate)]['decision_score']} "
@@ -508,7 +508,7 @@ class RangeDecisionEngine:
     ) -> tuple[AdjustmentCandidate, dict[str, object]]:
         """对单个候选执行门控与离散评估。"""
         candidate_label = (
-            f"策略={candidate.strategy}({candidate.strategy_display_name}) "
+            f"策略={candidate.strategy}({candidate.strategy_name}) "
             f"原始={candidate.original_range.format()} 目标={candidate.target_range.format()}"
         )
         rejection_reasons = self._check_hard_constraints(
@@ -541,6 +541,7 @@ class RangeDecisionEngine:
                 ),
                 {
                     "feasible": False,
+                    "rejection_reasons": rejection_reasons,
                     "context_level": ContextMatchLevel.STRONG_CONFLICT,
                     "contradiction_level": ContradictionLevel.HARD,
                     "blocked": True,
@@ -662,6 +663,7 @@ class RangeDecisionEngine:
                 "feasible": True,
                 "context_level": context_card.level,
                 "contradiction_level": penalty_card.level,
+                "contradiction_reasons": contradiction_reasons,
                 "blocked": penalty_card.blocked,
                 "decision_score": decision_score,
                 "context_score": context_card.score,
@@ -1571,17 +1573,20 @@ class RangeDecisionEngine:
         """最终决策：根据原样合法性和改写边际选择候选。"""
         reasons = []
 
+        original_state = states[id(original_candidate)]
         original_is_legal = bool(
-            states[id(original_candidate)]["feasible"]
-            and not states[id(original_candidate)]["blocked"]
+            original_state["feasible"] and not original_state["blocked"]
         )
         best_candidate = candidates[0]
 
         if not original_is_legal:
+            # 提取原样候选被拒绝的具体原因
+            rejection_reason = self._extract_rejection_reason(original_state)
             reasons.append(
                 (
-                    "原样范围未通过最终采用条件，按排序采用最佳可行候选；"
-                    f"策略={best_candidate.strategy}，"
+                    f"{rejection_reason}；"
+                    "按排序采用最佳可行候选；"
+                    f"策略={best_candidate.strategy_name}，"
                     f"目标={best_candidate.target_range.format()}，"
                     f"等级={best_candidate.decision_rank.name}"
                 )
@@ -1615,13 +1620,30 @@ class RangeDecisionEngine:
         reasons.append(
             (
                 "原样范围通过最终采用条件，但最佳改写候选形成明确胜出边际，采用改写结果；"
-                f"策略={best_rewrite.strategy}，"
+                f"策略={best_rewrite.strategy_name}，"
                 f"目标={best_rewrite.target_range.format()}，"
                 f"等级={best_rewrite.decision_rank.name}，"
                 f"边际={states[id(best_rewrite)]['margin_against_original']}"
             )
         )
         return best_rewrite, reasons
+
+    @staticmethod
+    def _extract_rejection_reason(state: dict[str, object]) -> str:
+        """从 state 中提取原样候选被拒绝的主要原因。"""
+        # 硬约束失败优先
+        if not state["feasible"] and "rejection_reasons" in state:
+            rejection_reasons = state["rejection_reasons"]
+            if isinstance(rejection_reasons, list) and rejection_reasons:
+                return rejection_reasons[0]
+
+        # 反证阻止
+        if state.get("blocked") and "contradiction_reasons" in state:
+            contradiction_reasons = state["contradiction_reasons"]
+            if isinstance(contradiction_reasons, list) and contradiction_reasons:
+                return contradiction_reasons[0]
+
+        return "原样范围未通过最终采用条件"
 
     def _sort_key(
         self,

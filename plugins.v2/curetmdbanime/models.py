@@ -428,13 +428,6 @@ class AdjustmentCandidate:
     decision_rank: DecisionRank = DecisionRank.REJECTED
 
     @property
-    def strategy_display_name(self) -> str:
-        """
-        返回策略展示名称。
-        """
-        return self.strategy_name
-
-    @property
     def changed(self) -> bool:
         """
         判断候选是否产生实质调整
