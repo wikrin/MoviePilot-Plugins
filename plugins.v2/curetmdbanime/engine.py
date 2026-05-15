@@ -1126,12 +1126,118 @@ class RangeDecisionEngine:
                     candidate.original_range, release_info
                 )
             ):
-                level = max(level, ContradictionLevel.SOFT)
+                level = max(level, ContradictionLevel.LIGHT)
                 reasons.append("资源更像当前更新而非历史合集, 历史周期候选被降级")
+
+        # 软反证：集数超出已播出集数
+        exceed_level, exceed_reasons = self._evaluate_episode_exceed_contradiction(
+            release_info, show_context, candidate
+        )
+        level = max(level, exceed_level)
+        reasons.extend(exceed_reasons)
 
         if not reasons:
             reasons.append("未发现额外反证")
         return level, reasons, blocked
+
+    def _evaluate_episode_exceed_contradiction(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[ContradictionLevel, list[str]]:
+        """
+        评估候选集数是否超出已播出集数的反证
+
+        根据超出幅度进行阶梯惩罚：
+        - 在宽限范围内：无反证（允许连载滞后）
+        - 超出宽限但≤2倍宽限：中等反证
+        - 大幅超出：硬反证（HARD）
+
+        :param release_info: 发布信息
+        :param show_context: 剧集上下文
+        :param candidate: 待评估候选
+        :return: `(contradiction_level, reasons)`
+        """
+        reasons: list[str] = []
+
+        # 只针对同季范围进行检查
+        if not candidate.target_range.is_same_season:
+            return ContradictionLevel.NONE, reasons
+
+        target_season = candidate.target_range.begin_season
+        target_end_episode = candidate.target_range.end_episode
+
+        # 获取该季已知最大集号
+        known_max_episode = show_context.known_max_episode_for_original(target_season)
+        if known_max_episode is None:
+            return ContradictionLevel.NONE, reasons
+
+        # 计算超出幅度
+        exceed_amount = target_end_episode - known_max_episode
+        if exceed_amount <= 0:
+            # 未超出，无反证
+            return ContradictionLevel.NONE, reasons
+
+        # 检查是否在宽限范围内
+        is_in_grace = show_context.is_latest_season_grace_point(
+            candidate.target_range.end,
+            self.grace_episodes,
+        )
+
+        # 宽限范围内不视为反证（容忍连载滞后）
+        if is_in_grace:
+            return ContradictionLevel.NONE, reasons
+
+        # 检查作品是否已完结
+        is_finalized = show_context.count_finalized
+
+        if is_finalized:
+            # 已完结作品，任何超出都是硬反证
+            level = ContradictionLevel.HARD
+            reasons.append(
+                f"作品已完结，但候选结束集号E{target_end_episode}超出已知最大集号E{known_max_episode}，"
+                f"超出{exceed_amount}集"
+            )
+            return level, reasons
+
+        # 连载中的作品，根据超出幅度分级处理
+        if exceed_amount <= self.grace_episodes * 2:
+            # 超出宽限但不超过2倍宽限：中等反证
+            level = ContradictionLevel.MODERATE
+            reasons.append(
+                f"候选结束集号E{target_end_episode}超出已知最大集号E{known_max_episode}，"
+                f"超出{exceed_amount}集超过宽限范围，给予中等反证"
+            )
+        else:
+            # 大幅超出：硬反证（阻断改写）
+            level = ContradictionLevel.HARD
+            reasons.append(
+                f"候选结束集号E{target_end_episode}大幅超出已知最大集号E{known_max_episode}，"
+                f"超出{exceed_amount}集远超宽限范围(grace={self.grace_episodes})，给予强烈反证"
+            )
+
+        # 结合发布时间进一步判断合理性
+        if (
+            release_info.release_date is not None
+            and show_context.last_air_date is not None
+        ):
+            days_diff = (release_info.release_date - show_context.last_air_date).days
+            if days_diff < 0:
+                # 资源发布日期早于最后播出日期，但集数却更高，这是强矛盾
+                level = ContradictionLevel.HARD
+                reasons.append(
+                    f"资源发布日期({release_info.release_date.isoformat()})早于最后播出日期"
+                    f"({show_context.last_air_date.isoformat()})，但集号却更高，存在时间矛盾"
+                )
+            elif days_diff < 7 and exceed_amount > 1:
+                # 短时间内不可能播出多集
+                level = max(level, ContradictionLevel.HARD)
+                reasons.append(
+                    f"距离最后播出仅{days_diff}天，但候选超出{exceed_amount}集，时间上不合理"
+                )
+
+        return level, reasons
 
     def _compose_decision_rank(
         self,
@@ -1209,7 +1315,8 @@ class RangeDecisionEngine:
         """把软硬反证转换为统一总分惩罚。"""
         penalty_score = {
             ContradictionLevel.NONE: 0,
-            ContradictionLevel.SOFT: -12,
+            ContradictionLevel.LIGHT: -6,
+            ContradictionLevel.MODERATE: -18,
             ContradictionLevel.HARD: -34,
         }[contradiction_level]
         return PenaltyScoreCard(

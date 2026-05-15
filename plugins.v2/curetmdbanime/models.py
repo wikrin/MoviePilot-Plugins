@@ -57,8 +57,10 @@ class ContradictionLevel(IntEnum):
 
     # 无反证：无冲突证据
     NONE = 0
-    # 软性反证：轻微矛盾，可降级
-    SOFT = 1
+    # 轻微反证：轻微矛盾，可降级
+    LIGHT = 1
+    # 中等反证：存在冲突，需降级
+    MODERATE = 2
     # 硬性反证：严重矛盾，阻断改写
     HARD = 2
 
