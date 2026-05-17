@@ -84,14 +84,17 @@ class RangeDecisionEngine:
     _EXPLICIT_MAPPING_STRATEGY = "explicit_mapping"
     _ABSOLUTE_EPISODE_STRATEGY = "absolute_episode"
     _PRODUCTION_CYCLE_STRATEGY = "production_cycle"
+    _SEASON_BY_WINDOW_STRATEGY = "season_by_window"
 
     def __init__(
         self,
         grace_episodes: int = 3,
         rewrite_threshold: int = 16,
+        assume_season_by_window: bool = False,
     ) -> None:
         self.grace_episodes = grace_episodes
         self.rewrite_threshold = rewrite_threshold
+        self.assume_season_by_window = assume_season_by_window
 
     def decide(
         self,
@@ -219,6 +222,7 @@ class RangeDecisionEngine:
             self._generate_normalize_episode_range_candidates,
             self._generate_explicit_mapping_candidates,
             self._generate_absolute_episode_candidates,
+            self._generate_season_by_window_candidates,
             self._generate_production_cycle_candidates,
         )
         deduped: dict[tuple[str, str], AdjustmentCandidate] = {}
@@ -498,6 +502,74 @@ class RangeDecisionEngine:
                 )
             )
         return tuple(candidates)
+
+    def _generate_season_by_window_candidates(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        original_range: EpisodeRange,
+    ) -> tuple[AdjustmentCandidate, ...]:
+        """当标题默认落入 S01 时，按发布时间反推目标季号。"""
+        if (
+            not self.assume_season_by_window
+            or original_range.intra_season_length is None
+            or not original_range.is_same_season
+            or original_range.begin_season != 1
+            or release_info.release_date is None
+            or self.__looks_like_batch_release(original_range, release_info)
+        ):
+            return ()
+
+        matched_cycle, matched_by_exact_window = self._find_cycle_by_release_date(
+            release_info.release_date,
+            show_context,
+        )
+        if matched_cycle is None or not matched_cycle.points:
+            return ()
+
+        target_season = matched_cycle.points[0].season
+        if target_season == original_range.begin_season:
+            return ()
+
+        target_range = EpisodeRange(
+            begin=EpisodePoint(target_season, original_range.begin_episode),
+            end=EpisodePoint(target_season, original_range.end_episode),
+        )
+        target_points = show_context.expand_target_points(target_range)
+        if not target_points or any(
+            not show_context.contains_point(point) for point in target_points
+        ):
+            return ()
+
+        match_detail = (
+            f"周期={matched_cycle.cycle_id}, "
+            f"窗口={matched_cycle.start_date.isoformat() if matched_cycle.start_date else '未知'}"
+            f"~{matched_cycle.end_date.isoformat() if matched_cycle.end_date else '未知'}"
+        )
+        reason_summary = (
+            "发布时间命中目标季播出窗口，按同集号推断季号"
+            if matched_by_exact_window
+            else "发布时间接近最新可用播出窗口，按同集号推断季号"
+        )
+        return (
+            self._build_candidate(
+                original_range=original_range,
+                target_range=target_range,
+                strategy=self._SEASON_BY_WINDOW_STRATEGY,
+                strategy_name="按播出窗口推断季号",
+                prior_rank=DecisionRank.MEDIUM,
+                evidence_level=(
+                    EvidenceLevel.HIGH
+                    if matched_by_exact_window
+                    else EvidenceLevel.MEDIUM
+                ),
+                reason_summary=reason_summary,
+                detail=match_detail,
+                requires_production_cycle=True,
+                degrade_historical_single_update=True,
+                intrinsic_evidence_kind="season_by_window",
+            ),
+        )
 
     def _evaluate_candidate(
         self,
@@ -993,6 +1065,7 @@ class RangeDecisionEngine:
             "explicit_mapping": self._evaluate_explicit_mapping_intrinsic_evidence,
             "absolute_episode": self._evaluate_absolute_episode_intrinsic_evidence,
             "production_cycle": self._evaluate_production_cycle_intrinsic_evidence,
+            "season_by_window": self._evaluate_season_by_window_intrinsic_evidence,
         }
         evaluator = evaluators.get(candidate.intrinsic_evidence_kind or "")
         if evaluator is None:
@@ -1073,6 +1146,28 @@ class RangeDecisionEngine:
             ]
         return DecisionRank.WEAK, ["制作周期候选未命中有效周期窗口"]
 
+    def _evaluate_season_by_window_intrinsic_evidence(
+        self,
+        release_info: ReleaseInfo,
+        show_context: ShowContext,
+        candidate: AdjustmentCandidate,
+    ) -> tuple[DecisionRank, list[str]]:
+        """评估按播出窗口推断季号候选的内在证据。"""
+        cycle = show_context.production_cycle_for_range(candidate.target_range)
+        if release_info.release_date is None or cycle is None:
+            return DecisionRank.WEAK, ["缺少发布时间或目标季播出窗口信息"]
+        if cycle.contains_date(release_info.release_date):
+            return DecisionRank.STRONG, [
+                "发布时间精确落在目标季播出窗口内"
+            ]
+
+        latest_cycle = show_context.latest_available_cycle(release_info.release_date)
+        if latest_cycle is not None and latest_cycle.cycle_id == cycle.cycle_id:
+            return DecisionRank.MEDIUM, [
+                "发布时间未命中窗口，但与最新可用播出周期一致"
+            ]
+        return DecisionRank.WEAK, ["发布时间不足以单独支撑目标季推断"]
+
     def _evaluate_contradictions(
         self,
         release_info: ReleaseInfo,
@@ -1104,13 +1199,23 @@ class RangeDecisionEngine:
         if (
             candidate.changed
             and candidate.intrinsic_evidence_kind
-            in {"absolute_episode", "production_cycle"}
+            in {"absolute_episode", "production_cycle", "season_by_window"}
             and not show_context.contains_point(candidate.original_range.begin)
             and candidate.original_range.begin_episode <= 3
         ):
             level = max(level, ContradictionLevel.HARD)
             blocked = True
             reasons.append("缺失季低位集号在无显式映射时不允许强行重映射")
+
+        if (
+            candidate.changed
+            and candidate.intrinsic_evidence_kind == "season_by_window"
+            and candidate.original_range.begin_episode <= 3
+            and not release_info.tmdb_mapping
+        ):
+            level = max(level, ContradictionLevel.HARD)
+            blocked = True
+            reasons.append("低位集号在无显式映射时不允许仅凭播出窗口改季")
 
         # 软反证：单集更新不应映射到历史周期（除非是合集）
         if (
@@ -1428,8 +1533,6 @@ class RangeDecisionEngine:
                 "batch",
                 "合集",
                 "全集",
-                "fin",
-                "final",
                 "bluray",
                 "bd",
             )
@@ -1704,6 +1807,21 @@ class RangeDecisionEngine:
             return 0
         return 1 if latest_cycle.cycle_id == cycle.cycle_id else -1
 
+    @staticmethod
+    def _find_cycle_by_release_date(
+        release_date: date,
+        show_context: ShowContext,
+    ) -> tuple[ProductionCycle | None, bool]:
+        """
+        根据发布时间定位最可信的播出周期。
+
+        先尝试精确命中窗口；若没有，再回退到发布时间下的最新可用周期。
+        """
+        for cycle in show_context.production_cycles:
+            if cycle.contains_date(release_date):
+                return cycle, True
+        return show_context.latest_available_cycle(release_date), False
+
 
 class MetaCorrectionUseCase:
     """元数据修正应用层用例"""
@@ -1713,14 +1831,17 @@ class MetaCorrectionUseCase:
         *,
         grace_episodes: int = 3,
         rewrite_threshold: int = 16,
+        assume_season_by_window: bool = False,
         decision_engine: RangeDecisionEngine | None = None,
     ) -> None:
         self.decision_engine = decision_engine or RangeDecisionEngine(
             grace_episodes=grace_episodes,
             rewrite_threshold=rewrite_threshold,
+            assume_season_by_window=assume_season_by_window,
         )
         self.grace_episodes = grace_episodes
         self.rewrite_threshold = rewrite_threshold
+        self.assume_season_by_window = assume_season_by_window
 
     def correct(
         self,

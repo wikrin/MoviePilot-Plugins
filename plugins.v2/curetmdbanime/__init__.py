@@ -23,6 +23,8 @@ class CureTMDbAnimeConfig(BaseModel):
     enabled: bool = Field(default=False)
     # 启用元数据修正
     enable_correction: bool = Field(default=True)
+    # 当标题默认解析为 S01 时，按发布时间匹配 TMDB 季播出窗口推断季号
+    assume_season_by_window: bool = Field(default=False)
     # 最新季允许的越界宽限集数
     grace_episodes: int = Field(default=2, ge=0, le=5)
     # 改写所需的最小总分优势（避免噪声触发改写）
@@ -79,6 +81,7 @@ class CureTMDbAnime(_PluginBase):
         self.meta_correction_use_case = MetaCorrectionUseCase(
             grace_episodes=self.config.grace_episodes,
             rewrite_threshold=self.config.rewrite_threshold,
+            assume_season_by_window=self.config.assume_season_by_window,
         )
 
         # 在单独线程中运行 CureTMDbAnime 服务
@@ -159,6 +162,20 @@ class CureTMDbAnime(_PluginBase):
                                         "props": {
                                             "model": "enable_correction",
                                             "label": "启用元数据修正",
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "assume_season_by_window",
+                                            "label": "按播出窗口推断季号",
+                                            "hint": "仅在标题缺少明确季号且默认解析为 S01 时，根据发布时间匹配 TMDB 季播出窗口尝试修正季号",
                                         },
                                     }
                                 ],
