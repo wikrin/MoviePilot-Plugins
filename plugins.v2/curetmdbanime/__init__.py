@@ -45,7 +45,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.2.2"
+    plugin_version = "2.2.3"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -127,6 +127,8 @@ class CureTMDbAnime(_PluginBase):
                                         "props": {
                                             "model": "enabled",
                                             "label": "启用插件",
+                                            "hint": "开启后将使用 CureTMDbAnime 代理 TheMovieDb API请求",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -144,6 +146,23 @@ class CureTMDbAnime(_PluginBase):
                                             "min": 1024,
                                             "max": 65535,
                                             "step": 1,
+                                            "hint": "插件服务的监听端口，范围 1024-65535",
+                                            "persistent-hint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "enable_correction",
+                                            "label": "启用元数据修正",
+                                            "hint": "开启后将对元数据季号、集号进行修正",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -160,22 +179,10 @@ class CureTMDbAnime(_PluginBase):
                                     {
                                         "component": "VSwitch",
                                         "props": {
-                                            "model": "enable_correction",
-                                            "label": "启用元数据修正",
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
                                             "model": "assume_season_by_window",
                                             "label": "按播出窗口推断季号",
-                                            "hint": "仅在标题缺少明确季号且默认解析为 S01 时，根据发布时间匹配 TMDB 季播出窗口尝试修正季号",
+                                            "hint": "在标题缺少明确季号时，根据发布时间匹配 TMDB 季播出窗口尝试修正季号",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -193,6 +200,8 @@ class CureTMDbAnime(_PluginBase):
                                             "min": 0,
                                             "max": 5,
                                             "step": 1,
+                                            "hint": "最新季连载中允许超出 TMDB 已知集数的宽限集数，用于容忍连载滞后",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -210,6 +219,8 @@ class CureTMDbAnime(_PluginBase):
                                             "min": 0,
                                             "max": 40,
                                             "step": 2,
+                                            "hint": "改写候选需比原样候选高出的最小分数差值，数值越大越严格",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
@@ -228,7 +239,8 @@ class CureTMDbAnime(_PluginBase):
                                         "props": {
                                             "model": "source",
                                             "label": "来源",
-                                            "placeholder": "远程地址",
+                                            "hint": "自定义分季数据源地址（JSON格式），适用于无法自动匹配或需自定义分季的场景",
+                                            "persistent-hint": True,
                                         },
                                     }
                                 ],
