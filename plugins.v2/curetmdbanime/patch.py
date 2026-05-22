@@ -1,4 +1,5 @@
 import sys
+import inspect
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
@@ -76,7 +77,11 @@ class MonkeyPatchManager:
         """
         将补丁方法的 co_filename 对齐到原始方法
         """
-        original_func = getattr(original_method, "__func__", original_method)
+        # 处理 original_method 可能是 staticmethod/classmethod 描述符的情况
+        original_func = original_method
+        if isinstance(original_method, (staticmethod, classmethod)):
+            original_func = original_method.__func__
+
         target_filename = getattr(
             getattr(original_func, "__code__", None), "co_filename", None
         )
@@ -117,7 +122,12 @@ class MonkeyPatchManager:
             logger.info(f"方法 {target_class.__name__}.{method_name} 跳过重复操作")
             return
 
-        original_method = getattr(target_class, method_name)
+        # 使用 inspect.getattr_static 获取原始描述符，保留 staticmethod/classmethod 包装
+        try:
+            original_method = inspect.getattr_static(target_class, method_name)
+        except AttributeError:
+            logger.error(f"无法在类 {target_class.__name__} 中找到方法 {method_name}")
+            return
 
         self._original_methods[patch_key] = original_method
 

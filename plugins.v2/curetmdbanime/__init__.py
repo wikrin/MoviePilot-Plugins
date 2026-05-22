@@ -45,7 +45,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.2.3"
+    plugin_version = "2.2.4"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -95,7 +95,6 @@ class CureTMDbAnime(_PluginBase):
 
     def stop_service(self):
         """退出插件"""
-        self.patch_manager.unpatch_all()
         if self._thread:
             # 设置停止事件
             self._event.set()
@@ -106,6 +105,9 @@ class CureTMDbAnime(_PluginBase):
             # 重置停止事件
             self._event.clear()
             self._thread = None
+
+        # 线程停止后再恢复补丁
+        self.patch_manager.unpatch_all()
 
     def get_api(self) -> List[Dict[str, Any]]:
         pass
