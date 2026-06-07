@@ -21,6 +21,12 @@ from .patch import MonkeyPatchManager
 class CureTMDbAnimeConfig(BaseModel):
     # 启用插件
     enabled: bool = Field(default=False)
+    # Bangumi API 地址
+    bangumi_api_url: str = Field(
+        default="https://api.bgm.tv",
+    )
+    # Bangumi API 是否使用代理
+    bangumi_use_proxy: bool = Field(default=True)
     # 启用元数据修正
     enable_correction: bool = Field(default=True)
     # 当标题默认解析为 S01 时，按发布时间匹配 TMDB 季播出窗口推断季号
@@ -45,7 +51,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.2.4"
+    plugin_version = "2.3.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -59,7 +65,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.2.2"
+    binary_version = "1.3.0"
 
     def __init__(self):
         super().__init__()
@@ -164,6 +170,42 @@ class CureTMDbAnime(_PluginBase):
                                             "model": "enable_correction",
                                             "label": "启用元数据修正",
                                             "hint": "开启后将对元数据季号、集号进行修正",
+                                            "persistent-hint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                        ],
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "bangumi_api_url",
+                                            "label": "Bangumi API URL",
+                                            "placeholder": "https://api.bgm.tv",
+                                            "hint": "请求 Bangumi API 时使用的地址",
+                                            "persistent-hint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VSwitch",
+                                        "props": {
+                                            "model": "bangumi_use_proxy",
+                                            "label": "Bangumi 使用代理",
+                                            "hint": "请求 Bangumi API 时是否使用代理",
                                             "persistent-hint": True,
                                         },
                                     }
@@ -290,6 +332,12 @@ class CureTMDbAnime(_PluginBase):
             "--data-dir",
             working_dir.as_posix(),
         ]
+
+        if self.config.bangumi_api_url:
+            cmd_args.extend(["--bangumi-api-url", self.config.bangumi_api_url])
+
+        if self.config.bangumi_use_proxy:
+            cmd_args.append("--bangumi-use-proxy")
 
         if self.config.source:
             cmd_args.extend(["--cure-source", self.config.source])
@@ -557,6 +605,9 @@ class CureTMDbAnime(_PluginBase):
         :param mediainfo: 媒体信息对象
         """
         if not meta or not mediainfo or mediainfo.type.name != "TV":
+            return meta
+
+        if set(mediainfo.genre_ids).isdisjoint(settings.ANIME_GENREIDS):
             return meta
 
         # 检查识别词是否已偏移集数

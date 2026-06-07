@@ -3,7 +3,6 @@ import inspect
 from typing import Optional, Callable
 from urllib.parse import urlparse
 
-from httpx import _client, _models
 from requests.sessions import Session
 
 from app.core.cache import Cache
@@ -172,28 +171,6 @@ class MonkeyPatchManager:
             Session, "merge_environment_settings", new_merge_environment_settings
         )
 
-    def patch_httpx(self):
-
-        original_sync_transport_for_url = _client.Client._transport_for_url
-        original_async_transport_for_url = _client.AsyncClient._transport_for_url
-
-        def new_sync_transport_for_url(instance: _client.Client, url: _models.URL):
-            if self._should_bypass_no_proxy_url(str(url)):
-                return instance._transport
-            return original_sync_transport_for_url(instance, url)
-
-        def new_async_transport_for_url(
-            instance: _client.AsyncClient, url: _models.URL
-        ):
-            if self._should_bypass_no_proxy_url(str(url)):
-                return instance._transport
-            return original_async_transport_for_url(instance, url)
-
-        self.patch(_client.Client, "_transport_for_url", new_sync_transport_for_url)
-        self.patch(
-            _client.AsyncClient, "_transport_for_url", new_async_transport_for_url
-        )
-
     def patch_httpx_transport(self):
         """
         通过调用栈获取 URL，动态调整 proxy 参数
@@ -234,10 +211,7 @@ class MonkeyPatchManager:
         self.patch(TMDb, "_build_url", new_build_url)
 
         self.patch_requests()
-        try:
-            self.patch_httpx_transport()
-        except AttributeError:
-            self.patch_httpx()
+        self.patch_httpx_transport()
 
     def patch_meta_enhancement(self, func: Callable):
         """
