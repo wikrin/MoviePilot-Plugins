@@ -65,7 +65,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.3.0"
+    binary_version = "1.3.1"
 
     def __init__(self):
         super().__init__()

@@ -541,6 +541,26 @@ class RangeDecisionEngine:
         ):
             return ()
 
+        matched_season_episodes = sorted(
+            TmdbChain().tmdb_episodes(
+                tmdbid=show_context.tmdbid,
+                season=matched_cycle.cycle_id,
+                episode_group=show_context.group_id,
+            )
+            or [],
+            key=lambda episode: episode.episode_number,
+        )
+        if not matched_season_episodes:
+            return ()
+
+        if self._has_conflicting_window_episodes(
+            release_info=release_info,
+            target_points=target_points,
+            matched_cycle=matched_cycle,
+            matched_season_episodes=matched_season_episodes,
+        ):
+            return ()
+
         match_detail = (
             f"周期={matched_cycle.cycle_id}, "
             f"窗口={matched_cycle.start_date.isoformat() if matched_cycle.start_date else '未知'}"
@@ -570,6 +590,42 @@ class RangeDecisionEngine:
                 intrinsic_evidence_kind="season_by_window",
             ),
         )
+
+    def _has_conflicting_window_episodes(
+        self,
+        *,
+        release_info: ReleaseInfo,
+        target_points: tuple[EpisodePoint, ...],
+        matched_cycle: ProductionCycle,
+        matched_season_episodes: list[object],
+
+    ) -> bool:
+        """检查目标季的播出时间是否与资源发布日期发生明显冲突。"""
+        release_date = release_info.release_date.isoformat()
+        for point in target_points:
+            if point.season != matched_cycle.cycle_id:
+                continue
+
+            episode_index = point.episode - 1
+            episode_info = (
+                matched_season_episodes[-1]
+                if episode_index > len(matched_season_episodes)
+                else matched_season_episodes[0]
+                if episode_index < self.grace_episodes
+                else matched_season_episodes[episode_index - self.grace_episodes]
+            )
+
+            if episode_info.air_date > release_date:
+                logger.debug(
+                    "%s 拒绝候选策略`按播出窗口推断季号`; 目标超出播出窗口 目标=%s, 发布日期=%s, 播出日期=%s ",
+                    release_info.title,
+                    point.format(),
+                    release_date,
+                    matched_season_episodes[episode_index].air_date,
+                )
+                return True
+
+        return False
 
     def _evaluate_candidate(
         self,
@@ -1157,15 +1213,11 @@ class RangeDecisionEngine:
         if release_info.release_date is None or cycle is None:
             return DecisionRank.WEAK, ["缺少发布时间或目标季播出窗口信息"]
         if cycle.contains_date(release_info.release_date):
-            return DecisionRank.STRONG, [
-                "发布时间精确落在目标季播出窗口内"
-            ]
+            return DecisionRank.STRONG, ["发布时间精确落在目标季播出窗口内"]
 
         latest_cycle = show_context.latest_available_cycle(release_info.release_date)
         if latest_cycle is not None and latest_cycle.cycle_id == cycle.cycle_id:
-            return DecisionRank.MEDIUM, [
-                "发布时间未命中窗口，但与最新可用播出周期一致"
-            ]
+            return DecisionRank.MEDIUM, ["发布时间未命中窗口，但与最新可用播出周期一致"]
         return DecisionRank.WEAK, ["发布时间不足以单独支撑目标季推断"]
 
     def _evaluate_contradictions(
@@ -1918,7 +1970,7 @@ class MetaCorrectionUseCase:
         season_info = sorted(
             mediainfo.season_info, key=lambda item: item.get("season_number", 0)
         )
-        for idx, info in enumerate(season_info, start=1):
+        for info in season_info:
             season = info.get("season_number")
             if not isinstance(season, int) or season < 1:
                 continue
@@ -1942,15 +1994,15 @@ class MetaCorrectionUseCase:
             end_air_date = (
                 (
                     datetime.strptime(d, "%Y-%m-%d").date()
-                    if (d := season_info[idx].get("air_date"))
+                    if (d := info.get("air_date"))
                     else next_air_date or last_air_date
                 )
-                if idx < len(season_info)
+                if season < len(season_info)
                 else next_air_date or last_air_date
             )
             production_cycles.append(
                 ProductionCycle(
-                    cycle_id=idx,
+                    cycle_id=season,
                     start_absolute=absolutes[0][0],
                     end_absolute=absolutes[-1][0],
                     points=tuple(point for _, point in absolutes),
@@ -1961,6 +2013,8 @@ class MetaCorrectionUseCase:
             )
 
         show_context = ShowContext(
+            tmdbid=mediainfo.tmdb_id,
+            group_id=mediainfo.episode_group,
             existing_points=frozenset(existing_points),
             season_episodes=season_episodes,
             point_to_absolute=point_to_absolute,
@@ -2058,22 +2112,22 @@ class MetaCorrectionUseCase:
         :param mediainfo: 媒体信息对象
         :return: 已最终确定时返回 True
         """
-        if mediainfo.status in ("Ended", "Canceled"):
+        # 如果剧集状态为 Ended 或 Canceled，则认为已完结
+        if mediainfo.status in ["Ended", "Canceled"]:
             return True
 
-        tmdb_info = mediainfo.tmdb_info if isinstance(mediainfo.tmdb_info, dict) else {}
+        finale_type = {"finale", "mid_season"}
+
+        if mediainfo.next_episode_to_air.get("episode_type") in finale_type:
+            return True
+
         episodes = TmdbChain().tmdb_episodes(
             mediainfo.tmdb_id,
             season=mediainfo.number_of_seasons,
             episode_group=mediainfo.episode_group,
         )
-        last_episode = tmdb_info.get("last_episode_to_air") or {}
-
-        if not last_episode and not episodes:
+        if not episodes:
             return False
 
-        is_last_finale = last_episode.get("episode_type") in ("finale", "mid_season")
-        is_ep_list_finale = (
-            episodes[-1].episode_type in ("finale", "mid_season") if episodes else False
-        )
-        return is_last_finale or is_ep_list_finale
+        # 判断是否最终集
+        return episodes[-1].episode_type in finale_type

@@ -475,6 +475,10 @@ class ShowContext:
     解释标题年份与发布时间等通用上下文证据。
     """
 
+    # TMDBID
+    tmdbid: int
+    # 剧集组 ID
+    group_id: int
     # 已存在的季集点集合
     existing_points: frozenset[EpisodePoint]
     # 各季对应的已知集号列表
