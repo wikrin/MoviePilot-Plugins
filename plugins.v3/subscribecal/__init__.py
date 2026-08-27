@@ -229,17 +229,17 @@ class TimeLineItem(BaseModel):
 
 class SubscribeCal(_PluginBase):
     # 插件名称
-    plugin_name = "订阅日历"
+    plugin_name = "订阅日历（dibin）"
     # 插件描述
     plugin_desc = "根据订阅生成日历, 以供导入至设备日历中"
     # 插件图标
-    plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
+    plugin_icon = "https://raw.githubusercontent.com/dibin666/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.1"
     # 插件作者
-    plugin_author = "Attente"
+    plugin_author = "dibin666"
     # 作者主页
-    author_url = "https://github.com/wikrin"
+    author_url = "https://github.com/dibin666"
     # 插件配置项ID前缀
     plugin_config_prefix = "subscribecal_"
     # 加载顺序
@@ -399,6 +399,10 @@ class SubscribeCal(_PluginBase):
             },
             None,
         )
+
+    def get_dashboard_meta(self) -> List[Dict[str, str]]:
+        """声明默认仪表盘入口，供 MoviePilot V3 仪表盘聚合器发现。"""
+        return [{"key": "", "name": self.plugin_name}]
 
     def generate_ics_content(self, calevent: dict[str, CalendarEvent]) -> str:
         """

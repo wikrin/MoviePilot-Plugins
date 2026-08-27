@@ -1,15 +1,16 @@
 {
   "SubscribeCal": {
-    "name": "订阅日历",
+    "name": "订阅日历（dibin）",
     "description": "根据订阅生成日历, 以供导入至设备日历中",
     "labels": "工具, 订阅",
-    "version": "2.0.0",
-    "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
-    "author": "Attente",
+    "version": "2.0.1",
+    "icon": "https://raw.githubusercontent.com/dibin666/MoviePilot-Plugins/main/icons/calendar_a.png",
+    "author": "dibin666",
     "level": 1,
     "release": true,
     "system_version": ">=3.0.0",
     "history": {
+      "v2.0.1": "修复 MoviePilot V3 仪表盘入口发现；更新插件名称、作者和图标来源。",
       "v2.0.0": "适配 MoviePilot V3 媒体来源与媒体 ID 订阅模型，修复日历刷新、缓存键和下载历史查询。",
       "v1.3.1": "首次加载时自动定位时间轴, 添加鼠标滚轮横向滚动支持",
       "v1.2.2": "仪表盘组件支持`全局图片缓存`，修复了信息获取失败时导致的异常",

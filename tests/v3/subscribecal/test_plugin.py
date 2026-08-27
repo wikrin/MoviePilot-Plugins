@@ -146,7 +146,18 @@ def test_package_metadata_matches_plugin_version() -> None:
     v3_package = json.loads((REPO_ROOT / "package.v3.json").read_text(encoding="utf-8"))
     v2_package = json.loads((REPO_ROOT / "package.v2.json").read_text(encoding="utf-8"))
 
-    assert v3_package["SubscribeCal"]["version"] == "2.0.0"
+    assert v3_package["SubscribeCal"]["version"] == "2.0.1"
+    assert v3_package["SubscribeCal"]["name"] == "订阅日历（dibin）"
+    assert v3_package["SubscribeCal"]["author"] == "dibin666"
     assert v3_package["SubscribeCal"]["system_version"] == ">=3.0.0"
     assert v2_package["SubscribeCal"]["v3"] is False
     assert SubscribeCal.plugin_version == v3_package["SubscribeCal"]["version"]
+
+
+def test_dashboard_metadata_declares_default_entry() -> None:
+    """V3 仪表盘聚合器应能发现插件的默认仪表盘入口。"""
+    plugin = object.__new__(SubscribeCal)
+    assert plugin.get_dashboard_meta() == [{
+        "key": "",
+        "name": "订阅日历（dibin）",
+    }]
