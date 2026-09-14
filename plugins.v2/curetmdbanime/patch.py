@@ -8,7 +8,14 @@ from requests.sessions import Session
 from app.core.cache import Cache
 from app.core.config import settings
 from app.core.context import MediaInfo, TorrentInfo
-from app.chain.transfer import JobManager
+
+# MoviePilot v3 将 JobManager 迁移到了 app.application.transfer.workflow，
+# v2 仍然位于 app.chain.transfer，这里按 v3 优先的顺序做最小兼容导入。
+try:
+    from app.application.transfer.workflow import JobManager
+except ImportError:
+    from app.chain.transfer import JobManager
+
 from app.helper.torrent import TorrentHelper
 from app.log import logger
 from app.modules.themoviedb.tmdbv3api.tmdb import TMDb
