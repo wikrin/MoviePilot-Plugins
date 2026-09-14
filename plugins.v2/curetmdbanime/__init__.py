@@ -47,11 +47,11 @@ class CureTMDbAnime(_PluginBase):
     # 插件名称
     plugin_name = "CTMDbA"
     # 插件描述
-    plugin_desc = "对 TMDb 上被合并为一季的番剧进行季信息分离。"
+    plugin_desc = "将 TMDb 上被合并为一季的番剧拆分为多季，不影响订阅与刮削。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "2.3.0"
+    plugin_version = "2.4.0"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -65,7 +65,7 @@ class CureTMDbAnime(_PluginBase):
     # 二进制文件
     binary_name = "curetmdbanime"
     # 二进制文件版本
-    binary_version = "1.3.1"
+    binary_version = "1.4.0"
 
     def __init__(self):
         super().__init__()
