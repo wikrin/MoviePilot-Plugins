@@ -615,7 +615,15 @@ class RangeDecisionEngine:
                 else matched_season_episodes[episode_index - self.grace_episodes]
             )
 
-            if episode_info.air_date > release_date:
+            if episode_info.air_date is None:
+                logger.debug(
+                    "%s 无法验证候选策略`按播出窗口推断季号`; 目标=%s, 发布日期=%s, 播出日期=未知",
+                    release_info.title,
+                    point.format(),
+                    release_date,
+                )
+
+            elif episode_info.air_date > release_date:
                 logger.debug(
                     "%s 拒绝候选策略`按播出窗口推断季号`; 目标超出播出窗口 目标=%s, 发布日期=%s, 播出日期=%s ",
                     release_info.title,
