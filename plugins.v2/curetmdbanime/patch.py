@@ -200,13 +200,7 @@ class MonkeyPatchManager:
         self.add_no_proxy_url(tmdb_local_url)
 
         def new_build_url(instance: TMDb, action, params=""):
-            return "%s/3%s?api_key=%s&%s&language=%s" % (
-                tmdb_local_url,
-                action,
-                instance.api_key,
-                params,
-                instance.language,
-            )
+            return f"{tmdb_local_url}/3{action}?api_key={instance.api_key}&{params}&language={instance.language}"
 
         self.patch(TMDb, "_build_url", new_build_url)
 
@@ -308,7 +302,7 @@ class MonkeyPatchManager:
         original_add_task = JobManager.add_task
 
         def new_add_task(instance, task, *args, **kwargs):
-            task.meta = func(task.meta, task.mediainfo)
+            task.meta = func(task.meta, task.mediainfo, task.download_history)
             return original_add_task(instance, task, *args, **kwargs)
 
         self.patch(JobManager, "add_task", new_add_task)

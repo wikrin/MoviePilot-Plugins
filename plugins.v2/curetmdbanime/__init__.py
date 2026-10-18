@@ -1,4 +1,5 @@
 import os
+import re
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,6 +12,7 @@ from app.core.context import MediaInfo
 from app.core.meta.metabase import MetaBase
 from app.log import logger
 from app.plugins import _PluginBase
+from app.schemas.history import DownloadHistory
 from app.utils.http import RequestUtils
 from app.utils.system import SystemUtils
 
@@ -533,8 +535,7 @@ class CureTMDbAnime(_PluginBase):
             with RequestUtils(proxies=settings.PROXY).get_stream(url) as r:
                 r.raise_for_status()
                 with open(temp_file, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
+                    f.writelines(r.iter_content(chunk_size=8192))
 
             # 设置可执行权限
             temp_file.chmod(0o755)
@@ -597,7 +598,7 @@ class CureTMDbAnime(_PluginBase):
 
         return mapping
 
-    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo) -> MetaBase:
+    def correct_meta(self, meta: MetaBase, mediainfo: MediaInfo, downloadhistory: DownloadHistory | None=None) -> MetaBase:
         """
         根据逻辑季信息调整元数据对象中的季号和集号。
 
@@ -626,9 +627,23 @@ class CureTMDbAnime(_PluginBase):
 
         tmdb_mapping = self._get_logical_mapping(mediainfo.tmdb_id)
         pubdate = self.patch_manager.get_torrent_pubdate(
-            title=meta.title,
-            description=meta.subtitle,
+            title=downloadhistory.torrent_name if downloadhistory else meta.title,
+            description=downloadhistory.torrent_description if downloadhistory else meta.subtitle,
         )
+        if (
+            downloadhistory
+            and downloadhistory.seasons
+            and downloadhistory.episodes
+            and not pubdate
+        ):
+            meta.set_season(
+                [int(x) for x in re.findall(r"\d+", downloadhistory.seasons)]
+            )
+            meta.set_episode(
+                [int(x) for x in re.findall(r"\d+", downloadhistory.episodes)]
+            )
+            logger.info(f"{meta.title} 通过下载历史记录修正为: {meta.season_episode}")
+            return meta
         try:
             decision = self.meta_correction_use_case.correct(
                 meta=meta,
