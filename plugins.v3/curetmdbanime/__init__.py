@@ -25,6 +25,10 @@ class CureTMDbAnimeConfig(BaseModel):
     bangumi_api_url: str = Field(
         default="https://api.bgm.tv",
     )
+    # TVDB API 地址
+    tvdb_api_url: str = Field(
+        default="https://api4.thetvdb.com/v4",
+    )
     # Bangumi API 是否使用代理
     bangumi_use_proxy: bool = Field(default=True)
     # 启用元数据修正
@@ -49,7 +53,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
-    plugin_version = "3.0.0"
+    plugin_version = "3.0.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -198,6 +202,22 @@ class CureTMDbAnime(_PluginBase):
                                 "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "tvdb_api_url",
+                                            "label": "TVDB API URL",
+                                            "placeholder": "https://api4.thetvdb.com/v4",
+                                            "hint": "请求 TVDB API 时使用的地址",
+                                            "persistent-hint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
                                         "component": "VSwitch",
                                         "props": {
                                             "model": "bangumi_use_proxy",
@@ -314,6 +334,9 @@ class CureTMDbAnime(_PluginBase):
         if self.config.bangumi_api_url:
             cmd_args.extend(["--bangumi-api-url", self.config.bangumi_api_url])
 
+        if self.config.tvdb_api_url:
+            cmd_args.extend(["--tvdb-api-url", self.config.tvdb_api_url])
+
         if self.config.bangumi_use_proxy:
             cmd_args.append("--bangumi-use-proxy")
 
@@ -326,6 +349,7 @@ class CureTMDbAnime(_PluginBase):
         if settings.TMDB_API_DOMAIN:
             cmd_args.extend(["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"])
 
+        process = None
         try:
             from subprocess import PIPE
 
@@ -498,7 +522,7 @@ class CureTMDbAnime(_PluginBase):
         for season_key, episodes in result.items():
             try:
                 season_num = int(season_key)
-            except TypeError, ValueError:
+            except (TypeError, ValueError):
                 continue
 
             if not isinstance(episodes, dict):
@@ -507,7 +531,7 @@ class CureTMDbAnime(_PluginBase):
             for episode_key, item in episodes.items():
                 try:
                     episode_num = int(episode_key)
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     continue
 
                 if not isinstance(item, dict):
@@ -518,7 +542,7 @@ class CureTMDbAnime(_PluginBase):
                 try:
                     logical_season = int(logical_season)
                     logical_episode = int(logical_episode)
-                except TypeError, ValueError:
+                except (TypeError, ValueError):
                     continue
 
                 mapping[(season_num, episode_num)] = (logical_season, logical_episode)
