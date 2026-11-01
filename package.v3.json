@@ -1,0 +1,28 @@
+{
+  "CureTMDbAnime": {
+    "name": "CTMDbA",
+    "description": "将 TMDb 上被合并为一季的番剧拆分为多季，不影响订阅与刮削。",
+    "labels": "整理, 刮削, 识别",
+    "version": "3.0.0",
+    "system_version": ">=3.1.5",
+    "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
+    "author": "Attente",
+    "level": 1,
+    "history": {
+      "3.0.0": "迁移至 V3 SDK 与模块布局"
+    }
+  },
+  "FollowUp": {
+    "name": "续作跟进",
+    "description": "根据媒体库或订阅历史检查系列续作并通知订阅",
+    "labels": "订阅",
+    "version": "3.0.0",
+    "system_version": ">=3.0.0",
+    "icon": "",
+    "author": "Attente",
+    "level": 2,
+    "history": {
+      "3.0.0": "迁移至 V3 SDK 与模块布局"
+    }
+  }
+}

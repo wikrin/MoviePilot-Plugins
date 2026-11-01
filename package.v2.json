@@ -7,6 +7,7 @@
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png",
       "author": "Attente",
       "level": 1,
+      "v3": false,
       "history": {
         "1.3.3": "优化下载记录清理逻辑",
         "1.3.2": "修复种子信息备份被覆盖的问题，调整备份条件判断",
@@ -43,6 +44,7 @@
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
       "author": "Attente",
       "level": 1,
+      "v3": false,
       "history": {
         "1.3.1": "首次加载时自动定位时间轴, 添加鼠标滚轮横向滚动支持",
         "1.2.2": "仪表盘组件支持`全局图片缓存`，修复了信息获取失败时导致的异常",
@@ -67,6 +69,7 @@
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/message_a.png",
       "author": "Attente",
       "level": 1,
+      "v3": false,
       "history": {
         "2.3.1": "提升数据持久化可靠性, 调整`消息聚合`判断条件",
         "2.3.0": "优化消息处理逻辑与正则匹配规则, 需MoviePilot v2.8.2+",
@@ -102,6 +105,7 @@
       "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
       "author": "Attente",
       "level": 1,
+      "v3": false,
       "history": {
         "2.4.1": "**🔧 变更（Changed）**\n\n- 修复按播出窗口推断季号时的逻辑错误[issue #51](https://github.com/wikrin/MoviePilot-Plugins/issues/51)",
         "2.4.0": "**✨ 新增（Added）**\n\n- \n- 新增TVDB作为拆分依据\n\n**🔧 变更（Changed）**\n\n- 拆分依据优先使用TVDB",
@@ -132,6 +136,7 @@
       "icon": "",
       "author": "Attente",
       "level": 2,
+      "v3": false,
       "history": {
         "1.2.0": "远程消息命令及运行一次开关兼容 MoviePilot v2.8.5，不再支持旧版",
         "1.1.7": "修复部分错误",
