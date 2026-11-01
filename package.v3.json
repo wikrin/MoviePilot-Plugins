@@ -9,6 +9,7 @@
     "author": "Attente",
     "level": 1,
     "history": {
+      "3.0.1": "配置模型增加 tvdb_api_url",
       "3.0.0": "迁移至 V3 SDK 与模块布局"
     }
   },
