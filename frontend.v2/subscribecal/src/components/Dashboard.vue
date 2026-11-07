@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onMounted, onDeactivated, reactive, ref, watch } from 'vue'
 import CalendarEvent from './cards/CalendarEvent.vue'
-import type { TimeLineGroup } from '../types'
+import type { TimeLineGroup } from '../types/index.ts'
 
 
 const props = defineProps({

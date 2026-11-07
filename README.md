@@ -26,4 +26,4 @@ https://github.com/wikrin/MoviePilot-Plugins/
 
 > - 拦截距`上次发送`不足`设定时间`的`重复消息`
 > - 支持使用不同 `模板` 发往不同 `消息渠道`
-> - 详细说明请查看 [README](https://github.com/wikrin/MoviePilot-Plugins/tree/main/frontend/notifyext)
+> - 详细说明请查看 [README](https://github.com/wikrin/MoviePilot-Plugins/tree/main/frontend.v2/notifyext)

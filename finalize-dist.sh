@@ -1,10 +1,13 @@
 #!/bin/bash
 
-# 插件前端资源存放目录
-frontend_dir="frontend"
+# 每行格式：前端目录|后端目录
+plugin_mappings=(
+  "frontend.v2|plugins.v2"
+  "frontend.v3|plugins.v3"
+)
 
-# 插件后端资源存放目录
-backend_dir="plugins.v2"
+# 未识别版本时按 v2 处理
+IFS='|' read -r frontend_dir backend_dir <<< "${plugin_mappings[0]}"
 
 # 白名单（支持通配符）
 keep_patterns=(
@@ -68,13 +71,20 @@ if [[ -n "$tmp" ]]; then
   parts+=("$tmp")
 fi
 
-# 匹配目录名
+# 从路径中的目录名识别插件版本和插件名
 target_index=-1
 for i in "${!parts[@]}"; do
-  if [[ "${parts[$i]}" =~ ^(plugins|plugins\.v2|$frontend_dir)$ ]]; then
-    target_index=$i
-    break
-  fi
+  path_part="${parts[$i]}"
+  for mapping in "${plugin_mappings[@]}"; do
+    IFS='|' read -r mapped_frontend_dir mapped_backend_dir <<< "$mapping"
+    if [[ "$path_part" == "$mapped_frontend_dir" || "$path_part" == "$mapped_backend_dir" ]]; then
+      frontend_dir="$mapped_frontend_dir"
+      backend_dir="$mapped_backend_dir"
+      target_index=$i
+      break
+    fi
+  done
+  [[ $target_index -ne -1 ]] && break
 done
 
 plugin_name=""
@@ -93,7 +103,9 @@ if [[ -z "$plugin_name" ]]; then
   plugin_name=$(basename "$current_path")
 fi
 
-cd "$frontend_dir/$plugin_name" || { echo "🚫 Directory not found: $plugin_name"; exit 1; }
+frontend_path="$ROOT_DIR/$frontend_dir/$plugin_name"
+echo "📦 Plugin directories: $frontend_dir/$plugin_name -> $backend_dir/$plugin_name"
+cd "$frontend_path" || { echo "🚫 Directory not found: $frontend_path"; exit 1; }
 
 # 安装依赖
 if [ ! -d "node_modules" ]; then
