@@ -27,9 +27,7 @@ class MonkeyPatchManager:
     def __init__(self):
 
         self.CACHE_REGION = "curetmdbanime:torrent_pubdate"
-        self.cache_backend = Cache(
-            maxsize=2 * settings.CONF.torrents, ttl=settings.CONF.meta
-        )
+        self.cache_backend = Cache(maxsize=2 * settings.CONF.torrents, ttl=settings.CONF.meta)
         # 存储已打补丁的方法的原始信息：{(target_class, method_name): original_method}
         self._original_methods = {}
         # 标记是否有任何补丁被应用
@@ -64,13 +62,8 @@ class MonkeyPatchManager:
         for no_proxy_url in self._no_proxy_urls:
             parsed_no_proxy_url = urlparse(no_proxy_url)
             # 比较主机和端口
-            if (
-                hostname == parsed_no_proxy_url.hostname
-                and port == parsed_no_proxy_url.port
-            ):
-                logger.debug(
-                    f"URL {url} 匹配不需要代理的URL {no_proxy_url}, 将绕过代理。"
-                )
+            if hostname == parsed_no_proxy_url.hostname and port == parsed_no_proxy_url.port:
+                logger.debug(f"URL {url} 匹配不需要代理的URL {no_proxy_url}, 将绕过代理。")
                 return True
         return False
 
@@ -83,9 +76,7 @@ class MonkeyPatchManager:
         original_func = getattr(original_method, "__func__", original_method)
         patch_func = getattr(new_method, "__func__", new_method)
 
-        target_filename = getattr(
-            getattr(original_func, "__code__", None), "co_filename", None
-        )
+        target_filename = getattr(getattr(original_func, "__code__", None), "co_filename", None)
         if not target_filename:
             return new_method
 
@@ -100,10 +91,7 @@ class MonkeyPatchManager:
             patch_func.__code__ = patch_code
 
             # 重定向 __name__：_get_caller() 通过 f_globals["__name__"] 识别插件帧
-            if (
-                original_module_name
-                and original_module_name != patch_func.__globals__.get("__name__")
-            ):
+            if original_module_name and original_module_name != patch_func.__globals__.get("__name__"):
                 new_globals = dict(patch_func.__globals__)
                 new_globals["__name__"] = original_module_name
                 patch_func = types.FunctionType(
@@ -113,9 +101,7 @@ class MonkeyPatchManager:
                     patch_func.__defaults__,
                     patch_func.__closure__,
                 )
-                patch_func.__qualname__ = getattr(
-                    patch_func, "__qualname__", patch_func.__name__
-                )
+                patch_func.__qualname__ = getattr(patch_func, "__qualname__", patch_func.__name__)
         except Exception as e:
             logger.debug(f"方法文件名/模块名对齐失败，保留原补丁实现: {e}")
             return new_method
@@ -162,9 +148,7 @@ class MonkeyPatchManager:
             logger.info("没有应用的补丁需要恢复")
             return
 
-        for (target_class, method_name), original_method in list(
-            self._original_methods.items()
-        ):
+        for (target_class, method_name), original_method in list(self._original_methods.items()):
             setattr(target_class, method_name, original_method)
             logger.debug(f"方法 {target_class.__name__}.{method_name} 已恢复")
 
@@ -177,18 +161,12 @@ class MonkeyPatchManager:
 
         original_merge_environment_settings = Session.merge_environment_settings
 
-        def new_merge_environment_settings(
-            instance, url, proxies, stream, verify, cert
-        ):
+        def new_merge_environment_settings(instance, url, proxies, stream, verify, cert):
             if self._should_bypass_no_proxy_url(url):
                 proxies = None
-            return original_merge_environment_settings(
-                instance, url, proxies, stream, verify, cert
-            )
+            return original_merge_environment_settings(instance, url, proxies, stream, verify, cert)
 
-        self.patch(
-            Session, "merge_environment_settings", new_merge_environment_settings
-        )
+        self.patch(Session, "merge_environment_settings", new_merge_environment_settings)
 
     def patch_httpx_transport(self):
         """
@@ -269,9 +247,7 @@ class MonkeyPatchManager:
                     return
 
                 self.cache_backend.set(new_key, pubdate, region=self.CACHE_REGION)
-                logger.debug(
-                    f"[TorrentCache] Recorded: Key={new_key[:10]}... PubDate={pubdate}"
-                )
+                logger.debug(f"[TorrentCache] Recorded: Key={new_key[:10]}... PubDate={pubdate}")
 
             except Exception as e:
                 logger.error(f"[TorrentCache] Failed to update cache: {e}")
@@ -297,9 +273,7 @@ class MonkeyPatchManager:
 
         original_record_match_resource = match_._record_match_resource
 
-        def new_record_match_resource(
-            context, decision: str, reason: str | None = None
-        ) -> None:
+        def new_record_match_resource(context, decision: str, reason: str | None = None) -> None:
 
             # app/chain/subscribe/match.py: _record_match_resource(_context, "rejected", "季、集范围不符合订阅")
             if decision == "rejected" and reason == "季、集范围不符合订阅":
@@ -317,16 +291,12 @@ class MonkeyPatchManager:
         original_torrent_meta = result_._torrent_meta
 
         def new_torrent_meta(torrent: TorrentInfo, custom_words: list[str], mediainfo):
-            meta = original_torrent_meta(
-                torrent=torrent, custom_words=custom_words, mediainfo=mediainfo
-            )
+            meta = original_torrent_meta(torrent=torrent, custom_words=custom_words, mediainfo=mediainfo)
             return func(meta, mediainfo)
 
         self.patch(result_, "_torrent_meta", new_torrent_meta)
 
-    def get_torrent_pubdate(
-        self, title: str | None, description: str | None = None
-    ) -> str | None:
+    def get_torrent_pubdate(self, title: str | None, description: str | None = None) -> str | None:
         """
         外部查询接口：通过标题和描述获取缓存的发布时间
         """
@@ -352,9 +322,7 @@ class MonkeyPatchManager:
 
     def patch_transfer_planning(self, func):
 
-        original_build_planning_input = (
-            TransferPlanningOwner._TransferChain__build_planning_input
-        )
+        original_build_planning_input = TransferPlanningOwner._TransferChain__build_planning_input
 
         def new_build_planning_input(instance, task, *args, **kwargs):
             # 防止内存共享, 赋值新对象
@@ -376,9 +344,7 @@ class MonkeyPatchManager:
             func(meta, mediainfo)
             return mediainfo
 
-        self.patch(
-            TheMovieDbModule, "_build_media_info_base", new_build_media_info_base
-        )
+        self.patch(TheMovieDbModule, "_build_media_info_base", new_build_media_info_base)
 
     def is_patched(self):
 

@@ -242,11 +242,7 @@ class ProductionCycle:
         """判断指定日期是否落在周期的播出窗口内"""
         if target is None or not self.has_schedule_window:
             return False
-        return bool(
-            self.start_date
-            and self.end_date
-            and self.start_date <= target <= self.end_date
-        )
+        return bool(self.start_date and self.end_date and self.start_date <= target <= self.end_date)
 
     @property
     def has_schedule_window(self) -> bool:
@@ -437,9 +433,7 @@ class ShowContext:
             return None
         return max(season_episodes)
 
-    def is_latest_season_grace_point(
-        self, point: EpisodePoint, grace_episodes: int
-    ) -> bool:
+    def is_latest_season_grace_point(self, point: EpisodePoint, grace_episodes: int) -> bool:
         """
         判断点是否落在最新季的宽限区间（容忍连载滞后）
         """
@@ -452,10 +446,7 @@ class ShowContext:
             return False
 
         return (
-            point.season == latest_season
-            and latest_max_episode
-            < point.episode
-            <= latest_max_episode + grace_episodes
+            point.season == latest_season and latest_max_episode < point.episode <= latest_max_episode + grace_episodes
         )
 
     def range_length(self, episode_range: EpisodeRange) -> int | None:
@@ -479,14 +470,9 @@ class ShowContext:
         end_absolute = self.absolute_by_point(episode_range.end)
         if begin_absolute is None or end_absolute is None:
             return False
-        return all(
-            self.point_by_absolute(abs_num) is not None
-            for abs_num in range(begin_absolute, end_absolute + 1)
-        )
+        return all(self.point_by_absolute(abs_num) is not None for abs_num in range(begin_absolute, end_absolute + 1))
 
-    def production_cycle_for_range(
-        self, episode_range: EpisodeRange
-    ) -> ProductionCycle | None:
+    def production_cycle_for_range(self, episode_range: EpisodeRange) -> ProductionCycle | None:
         """
         返回完整覆盖指定范围的播出档期
         """
@@ -495,18 +481,11 @@ class ShowContext:
         if begin_absolute is None or end_absolute is None:
             return None
         for cycle in self.production_cycles:
-            if (
-                cycle.start_absolute
-                <= begin_absolute
-                <= end_absolute
-                <= cycle.end_absolute
-            ):
+            if cycle.start_absolute <= begin_absolute <= end_absolute <= cycle.end_absolute:
                 return cycle
         return None
 
-    def latest_available_cycle(
-        self, release_date: date | None
-    ) -> ProductionCycle | None:
+    def latest_available_cycle(self, release_date: date | None) -> ProductionCycle | None:
         """
         返回指定发布时间下最新可用的播出周期
         """
@@ -524,9 +503,7 @@ class ShowContext:
                 break
         return latest
 
-    def expand_target_points(
-        self, episode_range: EpisodeRange
-    ) -> tuple[EpisodePoint, ...]:
+    def expand_target_points(self, episode_range: EpisodeRange) -> tuple[EpisodePoint, ...]:
         """
         展开目标范围中的逐集点 - 优先使用累计集序支持跨季展开
         """
@@ -534,10 +511,7 @@ class ShowContext:
         begin_absolute = self.absolute_by_point(episode_range.begin)
         end_absolute = self.absolute_by_point(episode_range.end)
         if begin_absolute is not None and end_absolute is not None:
-            points = [
-                self.point_by_absolute(abs_num)
-                for abs_num in range(begin_absolute, end_absolute + 1)
-            ]
+            points = [self.point_by_absolute(abs_num) for abs_num in range(begin_absolute, end_absolute + 1)]
             return tuple(point for point in points if point is not None)
 
         # 同季直接展开，跨季无映射则返回起止点
@@ -546,7 +520,5 @@ class ShowContext:
 
         return tuple(
             EpisodePoint(season=episode_range.begin_season, episode=episode)
-            for episode in range(
-                episode_range.begin_episode, episode_range.end_episode + 1
-            )
+            for episode in range(episode_range.begin_episode, episode_range.end_episode + 1)
         )

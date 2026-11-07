@@ -1,7 +1,7 @@
 {
   "CureTMDbAnime": {
     "name": "CTMDbA",
-    "description": "将 TMDb 上被合并为一季的番剧拆分为多季，不影响订阅与刮削。",
+    "description": "将 TMDb 上被合并为一季的番剧拆分为多季。",
     "labels": "整理, 刮削, 识别",
     "version": "3.0.1",
     "system_version": ">=3.1.5",

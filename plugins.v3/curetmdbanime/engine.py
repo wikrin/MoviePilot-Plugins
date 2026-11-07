@@ -4,8 +4,8 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 
-from app.sdk.media import MediaInfo, MetaBase
 from app.sdk.logging import logger
+from app.sdk.media import MediaInfo, MetaBase
 
 from .models import (
     AdjustmentCandidate,
@@ -43,18 +43,11 @@ def _range_is_absolute_contiguous(
     if not existing_points:
         return False
 
-    missing_points = tuple(
-        point for point in points if not context.contains_point(point)
-    )
-    if any(
-        not context.is_latest_season_grace_point(point, grace_episodes)
-        for point in missing_points
-    ):
+    missing_points = tuple(point for point in points if not context.contains_point(point))
+    if any(not context.is_latest_season_grace_point(point, grace_episodes) for point in missing_points):
         return False
 
-    return context.is_contiguous_range(
-        EpisodeRange(begin=existing_points[0], end=existing_points[-1])
-    )
+    return context.is_contiguous_range(EpisodeRange(begin=existing_points[0], end=existing_points[-1]))
 
 
 def _coerce_date(value: object) -> date | None:
@@ -135,9 +128,7 @@ class RangeDecisionEngine:
             "%s [决策开始] 原始=%s 发布时间=%s",
             release_info.title,
             original_range.format(),
-            release_info.release_date.isoformat()
-            if release_info.release_date
-            else "未知",
+            release_info.release_date.isoformat() if release_info.release_date else "未知",
         )
 
         evaluated_candidates: list[AdjustmentCandidate] = []
@@ -146,14 +137,10 @@ class RangeDecisionEngine:
         provided_by_strategy: dict[str, list[AdjustmentCandidate]] = {}
         if candidates is not None:
             for candidate in candidates:
-                provided_by_strategy.setdefault(candidate.strategy, []).append(
-                    candidate
-                )
+                provided_by_strategy.setdefault(candidate.strategy, []).append(candidate)
 
         strategies = self._CASCADE_STRATEGY_ORDER + tuple(
-            strategy
-            for strategy in provided_by_strategy
-            if strategy not in self._CASCADE_STRATEGY_ORDER
+            strategy for strategy in provided_by_strategy if strategy not in self._CASCADE_STRATEGY_ORDER
         )
         for strategy in strategies:
             strategy_candidates = (
@@ -170,12 +157,10 @@ class RangeDecisionEngine:
 
             accepted_candidates: list[AdjustmentCandidate] = []
             for candidate in strategy_candidates:
-                evaluated, accepted, rejection_reason = (
-                    self._evaluate_cascade_candidate(
-                        release_info=release_info,
-                        show_context=show_context,
-                        candidate=candidate,
-                    )
+                evaluated, accepted, rejection_reason = self._evaluate_cascade_candidate(
+                    release_info=release_info,
+                    show_context=show_context,
+                    candidate=candidate,
                 )
                 if accepted:
                     evaluated_candidates.append(evaluated)
@@ -198,13 +183,9 @@ class RangeDecisionEngine:
             if not accepted_candidates:
                 continue
 
-            target_ranges = {
-                candidate.target_range for candidate in accepted_candidates
-            }
+            target_ranges = {candidate.target_range for candidate in accepted_candidates}
             if len(target_ranges) > 1:
-                target_descriptions = "、".join(
-                    sorted(target_range.format() for target_range in target_ranges)
-                )
+                target_descriptions = "、".join(sorted(target_range.format() for target_range in target_ranges))
                 ambiguity_reason = (
                     f"保持原始范围 {original_range.format()}：相对集号 "
                     f"E{original_range.begin_episode:02d} 同时对应 "
@@ -226,12 +207,9 @@ class RangeDecisionEngine:
                     for candidate in accepted_candidates
                 }
                 evaluated_candidates = [
-                    ambiguous_candidates.get(id(candidate), candidate)
-                    for candidate in evaluated_candidates
+                    ambiguous_candidates.get(id(candidate), candidate) for candidate in evaluated_candidates
                 ]
-                logger.debug(
-                    "%s [最终保持] 原因=%s", release_info.title, ambiguity_reason
-                )
+                logger.debug("%s [最终保持] 原因=%s", release_info.title, ambiguity_reason)
                 return RangeAdjustmentDecision(
                     original_range=original_range,
                     final_range=original_range,
@@ -309,9 +287,7 @@ class RangeDecisionEngine:
                 show_context=show_context,
                 candidate=candidate,
             )
-        reasons = (
-            (rejection_reason,) if rejection_reason is not None else candidate.reasons
-        )
+        reasons = (rejection_reason,) if rejection_reason is not None else candidate.reasons
         evaluated = replace(
             candidate,
             reasons=reasons,
@@ -340,10 +316,7 @@ class RangeDecisionEngine:
 
         if candidate.strategy == self._SEASON_BY_WINDOW_STRATEGY:
             for evidence in candidate.evidences:
-                if (
-                    evidence.summary == "目标集播出日期晚于资源发布时间"
-                    and evidence.detail
-                ):
+                if evidence.summary == "目标集播出日期晚于资源发布时间" and evidence.detail:
                     return evidence.detail
             cycle = show_context.production_cycle_for_range(candidate.target_range)
             if (
@@ -387,9 +360,7 @@ class RangeDecisionEngine:
 
         generators = {
             self._EXPLICIT_MAPPING_STRATEGY: self._generate_explicit_mapping_candidates,
-            self._NORMALIZE_EPISODE_RANGE_STRATEGY: (
-                self._generate_normalize_episode_range_candidates
-            ),
+            self._NORMALIZE_EPISODE_RANGE_STRATEGY: self._generate_normalize_episode_range_candidates,
             self._SEASON_BY_WINDOW_STRATEGY: self._generate_season_by_window_candidates,
             self._ABSOLUTE_EPISODE_STRATEGY: self._generate_absolute_episode_candidates,
             self._PRODUCTION_CYCLE_STRATEGY: self._generate_production_cycle_candidates,
@@ -447,10 +418,7 @@ class RangeDecisionEngine:
 
         if episode_range.is_same_season:
             begin_absolute_point = show_context.absolute_by_point(episode_range.begin)
-            if (
-                begin_absolute_point is not None
-                and begin_absolute_point == episode_range.end_episode
-            ):
+            if begin_absolute_point is not None and begin_absolute_point == episode_range.end_episode:
                 return EpisodeRange(
                     begin=episode_range.begin,
                     end=episode_range.begin,
@@ -481,9 +449,7 @@ class RangeDecisionEngine:
         original_range: EpisodeRange,
     ) -> tuple[AdjustmentCandidate, ...]:
         """根据剧集上下文与发布习惯收敛原始范围。"""
-        normalized_range = self._normalize_episode_range_target(
-            release_info, show_context
-        )
+        normalized_range = self._normalize_episode_range_target(release_info, show_context)
         if normalized_range is None or normalized_range == original_range:
             return ()
         return (
@@ -511,13 +477,9 @@ class RangeDecisionEngine:
         candidates: list[AdjustmentCandidate] = []
         original_points = original_range.expand_original_points()
         if original_points:
-            mapped_points = tuple(
-                release_info.tmdb_mapping.get(point) for point in original_points
-            )
+            mapped_points = tuple(release_info.tmdb_mapping.get(point) for point in original_points)
             if all(point is not None for point in mapped_points):
-                target_points = tuple(
-                    point for point in mapped_points if point is not None
-                )
+                target_points = tuple(point for point in mapped_points if point is not None)
                 candidates.append(
                     self._build_candidate(
                         original_range=original_range,
@@ -561,14 +523,9 @@ class RangeDecisionEngine:
         if original_range.intra_season_length is None:
             return ()
 
-        season_episodes = show_context.season_episodes.get(
-            original_range.begin_season, []
-        )
+        season_episodes = show_context.season_episodes.get(original_range.begin_season, [])
         known_max_episode = max(season_episodes) if season_episodes else None
-        if (
-            known_max_episode is None
-            or original_range.begin_episode <= known_max_episode
-        ):
+        if known_max_episode is None or original_range.begin_episode <= known_max_episode:
             return ()
 
         begin_absolute = original_range.begin_episode
@@ -604,15 +561,22 @@ class RangeDecisionEngine:
             return ()
 
         original_points = show_context.expand_target_points(original_range)
-        if original_points and all(
-            show_context.contains_point(point) for point in original_points
-        ):
+        if original_points and all(show_context.contains_point(point) for point in original_points):
             return ()
 
         begin_index = original_range.begin_episode
         end_index = begin_index + original_range.intra_season_length - 1
         candidates: list[AdjustmentCandidate] = []
-        for cycle in show_context.production_cycles:
+        eligible_cycles = show_context.production_cycles
+        if release_info.release_date is not None:
+            matched_cycle, _ = self._find_cycle_by_release_date(
+                release_info.release_date,
+                show_context,
+            )
+            if matched_cycle is not None:
+                eligible_cycles = (matched_cycle,)
+
+        for cycle in eligible_cycles:
             if begin_index < 1 or end_index > len(cycle.points):
                 continue
             target_points = cycle.points[begin_index - 1 : end_index]
@@ -626,10 +590,7 @@ class RangeDecisionEngine:
                     strategy=self._PRODUCTION_CYCLE_STRATEGY,
                     strategy_name="制作周期定位",
                     reason_summary=f"按制作周期 #{cycle.cycle_id} 的相对集序生成范围",
-                    detail=(
-                        f"周期={cycle.cycle_id}, reason={cycle.reason}, "
-                        f"窗口={begin_index}-{end_index}"
-                    ),
+                    detail=(f"周期={cycle.cycle_id}, reason={cycle.reason}, 窗口={begin_index}-{end_index}"),
                     requires_production_cycle=True,
                     degrade_historical_single_update=True,
                 )
@@ -669,9 +630,7 @@ class RangeDecisionEngine:
             end=EpisodePoint(target_season, original_range.end_episode),
         )
         target_points = show_context.expand_target_points(target_range)
-        if not target_points or any(
-            not show_context.contains_point(point) for point in target_points
-        ):
+        if not target_points or any(not show_context.contains_point(point) for point in target_points):
             return ()
 
         if self.episode_loader is None:
@@ -758,10 +717,7 @@ class RangeDecisionEngine:
         if release_date is None:
             return None
 
-        episodes_by_number = {
-            getattr(episode, "episode_number", None): episode
-            for episode in matched_season_episodes
-        }
+        episodes_by_number = {getattr(episode, "episode_number", None): episode for episode in matched_season_episodes}
         for point in target_points:
             if point.season != matched_cycle.cycle_id:
                 continue
@@ -853,11 +809,7 @@ class RangeDecisionEngine:
                     for absolute in range(begin_absolute, end_absolute + 1)
                     if show_context.point_by_absolute(absolute) is None
                 )
-                missing_detail = (
-                    f"，缺失累计集序={','.join(map(str, missing_absolute))}"
-                    if missing_absolute
-                    else ""
-                )
+                missing_detail = f"，缺失累计集序={','.join(map(str, missing_absolute))}" if missing_absolute else ""
                 return (
                     "目标范围在累计集序上不连续: "
                     f"目标={target_range.format()}，累计窗口={begin_absolute}-{end_absolute}"
@@ -869,10 +821,7 @@ class RangeDecisionEngine:
 
         # 制作周期边界检查
         if candidate.requires_production_cycle and cycle is None:
-            return (
-                "制作周期候选没有完整落入已知周期: "
-                f"策略={candidate.strategy_name}，目标={target_range.format()}"
-            )
+            return f"制作周期候选没有完整落入已知周期: 策略={candidate.strategy_name}，目标={target_range.format()}"
 
         # 发布时间下限检查：资源发布日期不应显著早于目标周期开播日
         release_date = release_info.release_date
@@ -880,8 +829,7 @@ class RangeDecisionEngine:
             release_date is not None
             and cycle is not None
             and cycle.start_date is not None
-            and release_date
-            < cycle.start_date - timedelta(days=self.grace_episodes * 7)
+            and release_date < cycle.start_date - timedelta(days=self.grace_episodes * 7)
         ):
             return (
                 "目标周期开播日晚于资源发布日期: "
@@ -911,23 +859,14 @@ class RangeDecisionEngine:
         if not candidate.changed:
             if show_context.is_contiguous_range(original_range):
                 return (
-                    f"保持原始范围 {original_range.format()}：原始范围已在当前上下文中"
-                    "连续存在，未发现更强的改写依据。"
+                    f"保持原始范围 {original_range.format()}：原始范围已在当前上下文中连续存在，未发现更强的改写依据。"
                 )
-            return (
-                f"保持原始范围 {original_range.format()}：原始范围通过当前上下文校验，"
-                "未发现更强的改写依据。"
-            )
+            return f"保持原始范围 {original_range.format()}：原始范围通过当前上下文校验，未发现更强的改写依据。"
 
         if candidate.strategy == self._EXPLICIT_MAPPING_STRATEGY:
-            is_complete = any(
-                evidence.summary == "命中完整逐集映射"
-                for evidence in candidate.evidences
-            )
+            is_complete = any(evidence.summary == "命中完整逐集映射" for evidence in candidate.evidences)
             mapping_fact = (
-                "映射覆盖完整且目标范围连续"
-                if is_complete
-                else "命中起点映射并按原范围长度推导终点，目标范围连续"
+                "映射覆盖完整且目标范围连续" if is_complete else "命中起点映射并按原范围长度推导终点，目标范围连续"
             )
             return (
                 f"按{'完整' if is_complete else '起点'}外部映射改写："
@@ -951,15 +890,10 @@ class RangeDecisionEngine:
                 )
             elif release_info.release_date is not None:
                 match_description = f"发布时间 {release_info.release_date.isoformat()} {match_description}"
-            return (
-                f"按播出窗口改写：{match_description}，"
-                f"{original_range.format()} 调整为 {target_range.format()}。"
-            )
+            return f"按播出窗口改写：{match_description}，{original_range.format()} 调整为 {target_range.format()}。"
 
         if candidate.strategy == self._ABSOLUTE_EPISODE_STRATEGY:
-            known_max_episode = show_context.known_max_episode_for_original(
-                original_range.begin_season
-            )
+            known_max_episode = show_context.known_max_episode_for_original(original_range.begin_season)
             if known_max_episode is not None:
                 return (
                     f"按累计集数改写：原始 E{original_range.begin_episode:02d} 超过 "
@@ -969,22 +903,13 @@ class RangeDecisionEngine:
                 )
 
         if candidate.strategy == self._PRODUCTION_CYCLE_STRATEGY:
-            return (
-                f"按制作周期改写：相对集号 E{original_range.begin_episode:02d} "
-                f"唯一定位为 {target_range.format()}。"
-            )
+            return f"按制作周期改写：相对集号 E{original_range.begin_episode:02d} 唯一定位为 {target_range.format()}。"
 
         if candidate.strategy == self._NORMALIZE_EPISODE_RANGE_STRATEGY:
-            return (
-                f"按范围归一化改写：根据剧集上下文将 {original_range.format()} "
-                f"收敛为 {target_range.format()}。"
-            )
+            return f"按范围归一化改写：根据剧集上下文将 {original_range.format()} 收敛为 {target_range.format()}。"
 
         basis = candidate.reasons[0] if candidate.reasons else candidate.strategy_name
-        return (
-            f"按{candidate.strategy_name}改写：{basis}，"
-            f"{original_range.format()} 调整为 {target_range.format()}。"
-        )
+        return f"按{candidate.strategy_name}改写：{basis}，{original_range.format()} 调整为 {target_range.format()}。"
 
     def _build_fallback_reason(
         self,
@@ -1008,8 +933,7 @@ class RangeDecisionEngine:
                 (
                     evidence.detail
                     for evidence in candidate.evidences
-                    if evidence.summary == "目标集播出日期晚于资源发布时间"
-                    and evidence.detail
+                    if evidence.summary == "目标集播出日期晚于资源发布时间" and evidence.detail
                 ),
                 None,
             )
@@ -1017,50 +941,30 @@ class RangeDecisionEngine:
                 return f"保持原始范围 {original_range.format()}：{window_conflict}。"
 
         if show_context.is_contiguous_range(original_range):
-            return (
-                f"保持原始范围 {original_range.format()}：原始范围已在当前上下文中"
-                "连续存在，未发现更强的改写依据。"
-            )
+            return f"保持原始范围 {original_range.format()}：原始范围已在当前上下文中连续存在，未发现更强的改写依据。"
 
         if rejected_candidates:
             rejected = rejected_candidates[0]
-            rejection_reason = (
-                rejected.reasons[0] if rejected.reasons else "候选未通过统一校验"
-            )
+            rejection_reason = rejected.reasons[0] if rejected.reasons else "候选未通过统一校验"
             return (
                 f"保持原始范围 {original_range.format()}：候选目标 "
                 f"{rejected.target_range.format()} 被拒绝，{rejection_reason}。"
             )
 
         facts: list[str] = []
-        facts.append(
-            "外部映射为空"
-            if not release_info.tmdb_mapping
-            else "外部映射未覆盖完整范围"
-        )
-        known_max_episode = show_context.known_max_episode_for_original(
-            original_range.begin_season
-        )
-        if (
-            known_max_episode is not None
-            and original_range.begin_episode <= known_max_episode
-        ):
+        facts.append("外部映射为空" if not release_info.tmdb_mapping else "外部映射未覆盖完整范围")
+        known_max_episode = show_context.known_max_episode_for_original(original_range.begin_season)
+        if known_max_episode is not None and original_range.begin_episode <= known_max_episode:
             facts.append(
                 f"原始集号 E{original_range.begin_episode:02d} 未超过 "
                 f"S{original_range.begin_season:02d} 已知上限 E{known_max_episode:02d}"
             )
         elif known_max_episode is not None:
-            facts.append(
-                f"原始集号超过 S{original_range.begin_season:02d} 已知上限，"
-                "但累计集序无法唯一定位"
-            )
+            facts.append(f"原始集号超过 S{original_range.begin_season:02d} 已知上限，但累计集序无法唯一定位")
         elif self.assume_season_by_window and release_info.release_date is None:
             facts.append("缺少发布时间")
 
-        return (
-            f"保持原始范围 {original_range.format()}："
-            f"{'，且'.join(facts)}，无法形成唯一改写目标。"
-        )
+        return f"保持原始范围 {original_range.format()}：{'，且'.join(facts)}，无法形成唯一改写目标。"
 
     def _check_contradictions(
         self,
@@ -1090,8 +994,7 @@ class RangeDecisionEngine:
         # 硬反证：低位集号（≤3）在无显式映射时禁止重映射
         if (
             candidate.changed
-            and candidate.strategy
-            in {"absolute_episode", "production_cycle", "season_by_window"}
+            and candidate.strategy in {"absolute_episode", "production_cycle", "season_by_window"}
             and not show_context.contains_point(candidate.original_range.begin)
             and candidate.original_range.begin_episode <= 3
         ):
@@ -1180,10 +1083,7 @@ class RangeDecisionEngine:
         )
 
         # 结合发布时间进一步判断合理性
-        if (
-            release_info.release_date is not None
-            and show_context.last_air_date is not None
-        ):
+        if release_info.release_date is not None and show_context.last_air_date is not None:
             days_diff = (release_info.release_date - show_context.last_air_date).days
             if days_diff < 0:
                 reasons.append(
@@ -1191,9 +1091,7 @@ class RangeDecisionEngine:
                     f"({show_context.last_air_date.isoformat()})，但集号却更高，存在时间矛盾"
                 )
             elif days_diff < 7 and exceed_amount > 1:
-                reasons.append(
-                    f"距离最后播出仅{days_diff}天，但候选超出{exceed_amount}集，时间上不合理"
-                )
+                reasons.append(f"距离最后播出仅{days_diff}天，但候选超出{exceed_amount}集，时间上不合理")
 
         return True, reasons
 
@@ -1221,9 +1119,7 @@ class RangeDecisionEngine:
 
         # 范围长度≥6、跨季、或从E01开始且长度≥3
         plain_length = RangeDecisionEngine.__plain_range_length(episode_range) or 1
-        return (
-            plain_length >= 6 or episode_range.begin_season != episode_range.end_season
-        )
+        return plain_length >= 6 or episode_range.begin_season != episode_range.end_season
 
     @staticmethod
     def __plain_range_length(episode_range: EpisodeRange) -> int | None:
@@ -1308,8 +1204,17 @@ class MetaCorrectionUseCase:
         *,
         grace_episodes: int = 3,
         assume_season_by_window: bool = False,
+        production_cycle_gap_days: int = 90,
         decision_engine: RangeDecisionEngine | None = None,
     ) -> None:
+        """
+        初始化元数据修正用例。
+
+        :param grace_episodes: 最新季允许暂时缺失的集数
+        :param assume_season_by_window: 是否允许按发布时间推断默认季号
+        :param production_cycle_gap_days: 相邻集播出间隔超过该天数时切分制作周期
+        :param decision_engine: 可选的范围决策引擎
+        """
         self.decision_engine = decision_engine or RangeDecisionEngine(
             grace_episodes=grace_episodes,
             assume_season_by_window=assume_season_by_window,
@@ -1317,6 +1222,7 @@ class MetaCorrectionUseCase:
         )
         self.grace_episodes = grace_episodes
         self.assume_season_by_window = assume_season_by_window
+        self.production_cycle_gap_days = production_cycle_gap_days
 
     def correct(
         self,
@@ -1339,20 +1245,17 @@ class MetaCorrectionUseCase:
         if release_info is None:
             raise ValueError("缺少可用的季集范围信息")
 
-        season_episodes = {
-            season: episodes
-            for season, episodes in mediainfo.seasons.items()
-            if season > 0
-        }
+        season_episodes = {season: episodes for season, episodes in mediainfo.seasons.items() if season > 0}
         existing_points = [
             EpisodePoint(season=season, episode=episode)
             for season in sorted(season_episodes)
             for episode in season_episodes[season]
         ]
-        point_to_absolute = {
-            point: idx for idx, point in enumerate(existing_points, start=1)
-        }
+        point_to_absolute = {point: idx for idx, point in enumerate(existing_points, start=1)}
         absolute_to_point = {idx: point for point, idx in point_to_absolute.items()}
+        needs_cycle_inference = (
+            release_info.parsed_range is not None and release_info.parsed_range.begin_season not in season_episodes
+        )
 
         def parse_tmdb_episode(raw: object) -> tuple[EpisodePoint | None, date | None]:
             if not isinstance(raw, dict):
@@ -1360,37 +1263,24 @@ class MetaCorrectionUseCase:
             season = raw.get("season_number")
             episode = raw.get("episode_number")
             point = None
-            if (
-                isinstance(season, int)
-                and isinstance(episode, int)
-                and season >= 1
-                and episode >= 1
-            ):
+            if isinstance(season, int) and isinstance(episode, int) and season >= 1 and episode >= 1:
                 point = EpisodePoint(season=season, episode=episode)
             air_date = _coerce_date(raw.get("air_date"))
             return point, air_date
 
         tmdb_info = mediainfo.tmdb_info if isinstance(mediainfo.tmdb_info, dict) else {}
-        last_episode, last_air_date = parse_tmdb_episode(
-            tmdb_info.get("last_episode_to_air")
-        )
+        last_episode, last_air_date = parse_tmdb_episode(tmdb_info.get("last_episode_to_air"))
         next_episode, next_air_date = parse_tmdb_episode(mediainfo.next_episode_to_air)
 
         production_cycles: list[ProductionCycle] = []
-        season_info = sorted(
-            mediainfo.season_info, key=lambda item: item.get("season_number", 0)
-        )
+        season_info = sorted(mediainfo.season_info, key=lambda item: item.get("season_number", 0))
         for info_index, info in enumerate(season_info):
             season = info.get("season_number")
             if not isinstance(season, int) or season < 1:
                 continue
 
             absolutes = sorted(
-                (
-                    (absolute, point)
-                    for point, absolute in point_to_absolute.items()
-                    if point.season == season
-                ),
+                ((absolute, point) for point, absolute in point_to_absolute.items() if point.season == season),
                 key=lambda item: item[0],
             )
             if not absolutes:
@@ -1398,25 +1288,32 @@ class MetaCorrectionUseCase:
 
             air_date = _coerce_date(info.get("air_date"))
             next_season_start = (
-                _coerce_date(season_info[info_index + 1].get("air_date"))
-                if info_index + 1 < len(season_info)
-                else None
+                _coerce_date(season_info[info_index + 1].get("air_date")) if info_index + 1 < len(season_info) else None
             )
-            if next_season_start is not None and (
-                air_date is None or next_season_start > air_date
-            ):
+            if next_season_start is not None and (air_date is None or next_season_start > air_date):
                 end_air_date = next_season_start - timedelta(days=1)
             else:
                 end_air_date = next_air_date or last_air_date or air_date
-            production_cycles.append(
-                ProductionCycle(
-                    cycle_id=season,
-                    start_absolute=absolutes[0][0],
-                    end_absolute=absolutes[-1][0],
-                    points=tuple(point for _, point in absolutes),
-                    reason="按 TMDB season 分段",
-                    start_date=air_date,
-                    end_date=end_air_date,
+            season_points = tuple(point for _, point in absolutes)
+            episode_loader = getattr(self.decision_engine, "episode_loader", None)
+            loaded_episodes = (
+                episode_loader(
+                    tmdbid=mediainfo.tmdb_id,
+                    season=season,
+                    episode_group=mediainfo.episode_group,
+                )
+                if needs_cycle_inference and callable(episode_loader)
+                else None
+            )
+            production_cycles.extend(
+                self._build_season_production_cycles(
+                    season=season,
+                    season_points=season_points,
+                    point_to_absolute=point_to_absolute,
+                    episodes=loaded_episodes or [],
+                    gap_days=self.production_cycle_gap_days,
+                    fallback_start_date=air_date,
+                    fallback_end_date=end_air_date,
                 )
             )
 
@@ -1439,6 +1336,83 @@ class MetaCorrectionUseCase:
             release_info=release_info,
             show_context=show_context,
         )
+
+    @staticmethod
+    def _build_season_production_cycles(
+        *,
+        season: int,
+        season_points: tuple[EpisodePoint, ...],
+        point_to_absolute: dict[EpisodePoint, int],
+        episodes: list[object],
+        gap_days: int,
+        fallback_start_date: date | None,
+        fallback_end_date: date | None,
+    ) -> tuple[ProductionCycle, ...]:
+        """
+        按 TMDB 季内逐集播出日期的长间隔切分制作周期。
+
+        缺少逐集日期时保留 TMDB 原季边界，不根据不完整日期猜测断点。
+
+        :param season: TMDB 季号
+        :param season_points: 当前季中存在的季集点
+        :param point_to_absolute: 季集点到作品累计集序的映射
+        :param episodes: TMDB 返回的逐集数据
+        :param gap_days: 判定新周期的最小间隔天数
+        :param fallback_start_date: TMDB 季级起始日期
+        :param fallback_end_date: TMDB 季级结束日期
+        :return: 按日期间隔切分后的制作周期
+        """
+        air_dates: dict[int, date] = {}
+        for episode in episodes:
+            if isinstance(episode, dict):
+                episode_number = episode.get("episode_number")
+                raw_air_date = episode.get("air_date")
+            else:
+                episode_number = getattr(episode, "episode_number", None)
+                raw_air_date = getattr(episode, "air_date", None)
+            air_date = _coerce_date(raw_air_date)
+            if isinstance(episode_number, int) and air_date is not None:
+                air_dates[episode_number] = air_date
+
+        point_groups: list[list[EpisodePoint]] = [[]]
+        for point in season_points:
+            current_group = point_groups[-1]
+            if current_group:
+                previous_date = air_dates.get(current_group[-1].episode)
+                current_date = air_dates.get(point.episode)
+                if (
+                    previous_date is not None
+                    and current_date is not None
+                    and (current_date - previous_date).days > gap_days
+                ):
+                    point_groups.append([])
+            point_groups[-1].append(point)
+
+        has_episode_dates = any(point.episode in air_dates for point in season_points)
+        if len(point_groups) == 1 and not has_episode_dates:
+            start_date = fallback_start_date
+            end_date = fallback_end_date
+            reason = "按 TMDB season 分段"
+        else:
+            start_date = None
+            end_date = None
+            reason = f"按逐集播出间隔 {gap_days} 天切分"
+
+        cycles: list[ProductionCycle] = []
+        for group in point_groups:
+            group_dates = tuple(air_dates[point.episode] for point in group if point.episode in air_dates)
+            cycles.append(
+                ProductionCycle(
+                    cycle_id=season,
+                    start_absolute=point_to_absolute[group[0]],
+                    end_absolute=point_to_absolute[group[-1]],
+                    points=tuple(group),
+                    reason=reason,
+                    start_date=min(group_dates) if group_dates else start_date,
+                    end_date=max(group_dates) if group_dates else end_date,
+                )
+            )
+        return tuple(cycles)
 
     @staticmethod
     def _load_tmdb_episodes(
@@ -1499,7 +1473,7 @@ class MetaCorrectionUseCase:
         for source_point, target_point in tmdb_mapping.items():
             try:
                 normalized[EpisodePoint(*source_point)] = EpisodePoint(*target_point)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
         return normalized
 

@@ -3,7 +3,7 @@ import re
 import threading
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.history import DownloadHistory
 from app.sdk.cache import cached
@@ -19,6 +19,12 @@ from .patch import MonkeyPatchManager
 
 
 class CureTMDbAnimeConfig(BaseModel):
+    """
+    CureTMDbAnime 插件配置。
+
+    """
+
+    model_config = ConfigDict(extra="ignore")
     # 启用插件
     enabled: bool = Field(default=False)
     # Bangumi API 地址
@@ -35,6 +41,8 @@ class CureTMDbAnimeConfig(BaseModel):
     enable_correction: bool = Field(default=True)
     # 当标题默认解析为 S01 时，按发布时间匹配 TMDB 季播出窗口推断季号
     assume_season_by_window: bool = Field(default=False)
+    # 逐集播出间隔超过该阈值时切分制作周期
+    production_cycle_gap_days: int = Field(default=70, ge=20, le=365)
     # 最新季允许的越界宽限集数
     grace_episodes: int = Field(default=2, ge=0, le=5)
     # 远程数据源地址
@@ -49,7 +57,7 @@ class CureTMDbAnime(_PluginBase):
     # 插件名称
     plugin_name = "CTMDbA"
     # 插件描述
-    plugin_desc = "将 TMDb 上被合并为一季的番剧拆分为多季，不影响订阅与刮削。"
+    plugin_desc = "将 TMDb 上被合并为一季的番剧拆分为多季。"
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png"
     # 插件版本
@@ -89,6 +97,7 @@ class CureTMDbAnime(_PluginBase):
         self.meta_correction_use_case = MetaCorrectionUseCase(
             grace_episodes=self.config.grace_episodes,
             assume_season_by_window=self.config.assume_season_by_window,
+            production_cycle_gap_days=self.config.production_cycle_gap_days,
         )
 
         # 在单独线程中运行 CureTMDbAnime 服务
@@ -262,6 +271,25 @@ class CureTMDbAnime(_PluginBase):
                                             "max": 5,
                                             "step": 1,
                                             "hint": "最新季连载中允许超出 TMDB 已知集数的宽限集数，用于容忍连载滞后",
+                                            "persistent-hint": True,
+                                        },
+                                    }
+                                ],
+                            },
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 4},
+                                "content": [
+                                    {
+                                        "component": "VTextField",
+                                        "props": {
+                                            "model": "production_cycle_gap_days",
+                                            "label": "制作周期间隔阈值（天）",
+                                            "type": "number",
+                                            "min": 1,
+                                            "max": 365,
+                                            "step": 1,
+                                            "hint": "制作周期策略中，相邻集播出间隔超过该天数时视为新的制作周期；默认 90 天",
                                             "persistent-hint": True,
                                         },
                                     }
@@ -522,7 +550,7 @@ class CureTMDbAnime(_PluginBase):
         for season_key, episodes in result.items():
             try:
                 season_num = int(season_key)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 continue
 
             if not isinstance(episodes, dict):
@@ -531,7 +559,7 @@ class CureTMDbAnime(_PluginBase):
             for episode_key, item in episodes.items():
                 try:
                     episode_num = int(episode_key)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
 
                 if not isinstance(item, dict):
@@ -542,7 +570,7 @@ class CureTMDbAnime(_PluginBase):
                 try:
                     logical_season = int(logical_season)
                     logical_episode = int(logical_episode)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
 
                 mapping[(season_num, episode_num)] = (logical_season, logical_episode)
