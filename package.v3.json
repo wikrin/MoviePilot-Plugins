@@ -25,5 +25,18 @@
     "history": {
       "3.0.0": "迁移至 V3 SDK 与模块布局"
     }
+  },
+  "SubscribeCal": {
+    "name": "订阅日历",
+    "description": "为订阅的番剧提供日历订阅功能",
+    "labels": "订阅, 日历",
+    "version": "2.0.0",
+    "system_version": ">=3.0.0",
+    "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png",
+    "author": "Attente",
+    "level": 2,
+    "history": {
+      "2.0.0": "迁移至 V3 SDK 与模块布局, 增加 Gist 同步功能, 修复移动设备仪表盘组件显示问题"
+    }
   }
 }
