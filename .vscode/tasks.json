@@ -2,16 +2,27 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Plugin: Build and cleanup-Tasks",
+      "label": "Plugin-Frontebd Build",
       "type": "shell",
-      "command": "${input:terminate}",
-      "dependsOn": [
-        "Plugin-Frontebd Build"
+      "command": "./finalize-dist.sh",
+      "args": [
+        "build"
       ],
-      "dependsOrder": "sequence",
+      "options": {
+        "env": {
+          "PLUGIN_PATH": "${fileDirname}"
+        }
+      },
       "group": {
         "kind": "build",
         "isDefault": true
+      },
+      "isBackground": true,
+      "presentation": {
+        "clear": true,
+        "close": true,
+        "showReuseMessage": false,
+        "revealProblems": "onProblem"
       }
     },
     {
@@ -30,44 +41,6 @@
         "kind": "test",
         "isDefault": true
       }
-    },
-    {
-      "label": "Plugin-Frontebd Build",
-      "type": "shell",
-      "command": "./finalize-dist.sh",
-      "args": [
-        "build"
-      ],
-      "options": {
-        "env": {
-          "PLUGIN_PATH": "${fileDirname}"
-        }
-      },
-      "isBackground": true,
-      "problemMatcher": {
-        "pattern": {
-          "regexp": "."
-        },
-        "background": {
-          "activeOnStart": true,
-          "beginsPattern": "^Run mode:",
-          "endsPattern": ".*Cleanup completed.$"
-        }
-      }
-    },
-    {
-      "label": "cleanup-Tasks",
-      "type": "shell",
-      "command": "${input:terminate}",
-      "isBackground": false
     }
-  ],
-  "inputs": [
-    {
-      "id": "terminate",
-      "type": "command",
-      "command": "workbench.action.tasks.terminate",
-      "args": "Plugin-Frontebd Build"
-    },
   ]
 }
