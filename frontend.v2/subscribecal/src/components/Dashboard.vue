@@ -499,47 +499,23 @@ onDeactivated(() => {
             </div>
 
             <!-- 时间轴内容 -->
-            <div
-              v-else
-              ref="timelineContainerRef"
-              class="timeline-container"
-              @pointerdown="handleTimelinePointerDown"
-              @pointerup="clearTimelinePointerIntent"
-              @pointercancel="clearTimelinePointerIntent"
-              @scroll="handleTimelineScroll"
-              @wheel="handleTimelineWheel"
-            >
+            <div v-else ref="timelineContainerRef" class="timeline-container" @pointerdown="handleTimelinePointerDown"
+              @pointerup="clearTimelinePointerIntent" @pointercancel="clearTimelinePointerIntent"
+              @scroll="handleTimelineScroll" @wheel="handleTimelineWheel">
               <div class="timeline-track">
                 <!-- 横向时间轴 -->
-                <v-timeline
-                  direction="horizontal"
-                  align="center"
-                  line-color="primary"
-                  class="dense-timeline"
-                >
-                  <v-timeline-item
-                    v-for="(group, index) in displayedGroups"
-                    :key="group.date"
-                    class="timeline-group-item"
-                    :data-group-date="group.date"
-                    :dot-color="getStatusColor(group)"
-                    :size="getTimelineItemSize(group)"
-                  >
+                <v-timeline direction="horizontal" align="center" line-color="primary" class="dense-timeline">
+                  <v-timeline-item v-for="(group, index) in displayedGroups" :key="group.date"
+                    class="timeline-group-item" :data-group-date="group.date" :dot-color="getStatusColor(group)"
+                    :size="getTimelineItemSize(group)">
                     <template #opposite>
                       {{ group.date }}
                     </template>
 
                     <!-- 用于自动居中计算的隐藏锚点，不参与实际交互 -->
-                    <div
-                      class="timeline-center-anchor"
-                      :data-group-date-anchor="group.date"
-                      aria-hidden="true"
-                    ></div>
+                    <div class="timeline-center-anchor" :data-group-date-anchor="group.date" aria-hidden="true"></div>
 
-                    <CalendarEvent
-                      :events="group"
-                      :position="index % 2 === 0 ? 'top' : 'bottom'"
-                    />
+                    <CalendarEvent :events="group" :position="index % 2 === 0 ? 'top' : 'bottom'" />
                   </v-timeline-item>
                 </v-timeline>
               </div>
@@ -560,18 +536,21 @@ onDeactivated(() => {
 .dashboard-widget {
   display: flex;
   flex-direction: column;
-  height: 100%; /* 确保占满父容器 */
+  height: 100%;
+  /* 确保占满父容器 */
 }
 
 .v-card-text {
   display: flex;
   flex-direction: column;
-  flex-grow: 1; /* 占据剩余空间 */
+  flex-grow: 1;
+  /* 占据剩余空间 */
   overflow: hidden;
 }
 
 .timeline-container {
-  flex-grow: 1; /* 自动扩展以填满可用空间 */
+  flex-grow: 1;
+  /* 自动扩展以填满可用空间 */
   overflow-x: auto;
   overflow-y: hidden;
   scroll-behavior: smooth;

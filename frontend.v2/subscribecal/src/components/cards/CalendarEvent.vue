@@ -5,7 +5,7 @@ import { TimeLineGroup, TimeLineItem } from '../../types'
 const props = defineProps({
   events: {
     type: Object as () => TimeLineGroup,
-    default: () => {},
+    default: () => { },
   },
   position: {
     type: String,
@@ -131,13 +131,8 @@ function getIconForEventType(type: string): string {
 <template>
   <div class="card-container" @click="openDialog">
     <div class="stacked-cards">
-      <div
-        v-for="(event, index) in uniqueEvents"
-        :key="event.id"
-        class="stacked-image"
-        :class="`image-${position}`"
-      >
-        <img :src="getImageUrl(index === 0 ? event.poster : event.backdrop)"/>
+      <div v-for="(event, index) in uniqueEvents" :key="event.id" class="stacked-image" :class="`image-${position}`">
+        <img :src="getImageUrl(index === 0 ? event.poster : event.backdrop)" />
       </div>
 
       <!-- 标题 -->
@@ -149,60 +144,43 @@ function getIconForEventType(type: string): string {
     <v-dialog v-model="showDialog" max-width="50rem" scrollable>
       <div class="modal-content" @click="handleDialogClick">
         <v-card>
-        <v-card-title class="bg-primary-lighten-5">{{events.date}}</v-card-title>
-        <v-card-text class="py-4">
-          <!-- 竖向时间轴 -->
-          <v-timeline
-            side="end"
-            direction="vertical"
-            line-color="primary"
-            class="dense-timeline scrollable-timeline"
-          >
-            <v-timeline-item
-              v-for="event in sortedEvents"
-              :key="event.uid"
-              size="small"
-              :dot-color="getStatusColor(event)"
-              :icon="getIconForEventType(event.type)"
-              fill-dot
-            >
-            <VCard class="pl-4">
-              <div class="d-flex flex-row align-center">
-                <div class="mr-4">
-                  <VImg
-                    height="75"
-                    width="50"
-                    :src="getImageUrl(event.poster)"
-                    aspect-ratio="2/3"
-                    class="object-cover rounded ring-gray-500"
-                    cover
-                  >
-                    <template #placeholder>
-                      <div class="w-full h-full">
-                        <VSkeletonLoader class="object-cover aspect-w-2 aspect-h-3" />
-                      </div>
-                    </template>
-                  </VImg>
-                </div>
-                <div>
-                  <VCardSubtitle class="pa-1 px-2 font-bold break-words whitespace-break-spaces">
-                    {{ event.summary }}
-                  </VCardSubtitle>
-                  <VCardText class="pa-0 px-2 break-words">
-                    <v-icon small color="#FFB400" class="mr-1">mdi-star</v-icon>
-                    <span class="mr-4">{{ event.vote ?? '暂无' }}</span>
-                    <v-icon small color="primary" class="mr-1">mdi-clock-time-four-outline</v-icon>
-                    <span>
-                      {{ event.dtstart.toTimeString().slice(0, 5) }} -
-                      {{ event.dtend.toTimeString().slice(0, 5) }}
-                    </span>
-                  </VCardText>
-                </div>
-              </div>
-            </VCard>
-            </v-timeline-item>
-          </v-timeline>
-        </v-card-text>
+          <v-card-title class="bg-primary-lighten-5">{{ events.date }}</v-card-title>
+          <v-card-text class="py-4">
+            <!-- 竖向时间轴 -->
+            <v-timeline side="end" direction="vertical" line-color="primary" class="dense-timeline scrollable-timeline">
+              <v-timeline-item v-for="event in sortedEvents" :key="event.uid" size="small"
+                :dot-color="getStatusColor(event)" :icon="getIconForEventType(event.type)" fill-dot>
+                <VCard class="pl-4">
+                  <div class="d-flex flex-row align-center">
+                    <div class="mr-4">
+                      <VImg height="75" width="50" :src="getImageUrl(event.poster)" aspect-ratio="2/3"
+                        class="object-cover rounded ring-gray-500" cover>
+                        <template #placeholder>
+                          <div class="w-full h-full">
+                            <VSkeletonLoader class="object-cover aspect-w-2 aspect-h-3" />
+                          </div>
+                        </template>
+                      </VImg>
+                    </div>
+                    <div>
+                      <VCardSubtitle class="pa-1 px-2 font-bold break-words whitespace-break-spaces">
+                        {{ event.summary }}
+                      </VCardSubtitle>
+                      <VCardText class="pa-0 px-2 break-words">
+                        <v-icon small color="#FFB400" class="mr-1">mdi-star</v-icon>
+                        <span class="mr-4">{{ event.vote ?? '暂无' }}</span>
+                        <v-icon small color="primary" class="mr-1">mdi-clock-time-four-outline</v-icon>
+                        <span>
+                          {{ event.dtstart.toTimeString().slice(0, 5) }} -
+                          {{ event.dtend.toTimeString().slice(0, 5) }}
+                        </span>
+                      </VCardText>
+                    </div>
+                  </div>
+                </VCard>
+              </v-timeline-item>
+            </v-timeline>
+          </v-card-text>
         </v-card>
       </div>
     </v-dialog>
@@ -244,25 +222,29 @@ function getIconForEventType(type: string): string {
 .stacked-image:nth-child(1) {
   width: 45%;
   height: 68%;
-  z-index: 4;  /* 最顶层 */
+  z-index: 4;
+  /* 最顶层 */
 }
 
- .stacked-image:nth-child(2) {
+.stacked-image:nth-child(2) {
   width: 55%;
   height: 35%;
-  z-index: 2; /* 第三层 */
+  z-index: 2;
+  /* 第三层 */
 }
 
 .stacked-image:nth-child(3) {
   width: 50%;
   height: 35%;
-  z-index: 3;  /* 第二层 */
+  z-index: 3;
+  /* 第二层 */
 }
 
-.stacked-image:nth-child(4)  {
+.stacked-image:nth-child(4) {
   width: 60%;
   height: 40%;
-  z-index: 1; /* 最底层 */
+  z-index: 1;
+  /* 最底层 */
 }
 
 .image-top:nth-child(1) {
@@ -307,15 +289,17 @@ function getIconForEventType(type: string): string {
 }
 
 .titles-container {
-  font-size: calc(0.5vw);
+  font-size: 0.875rem;
   color: #006400;
   font-weight: bold;
   white-space: normal;
   text-align: center;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3; /* 保留旧版 */
-  line-clamp: 3; /* 新增标准属性 */
+  -webkit-line-clamp: 3;
+  /* 保留旧版 */
+  line-clamp: 3;
+  /* 新增标准属性 */
   overflow: hidden;
   text-overflow: ellipsis;
   position: absolute;
@@ -340,9 +324,12 @@ function getIconForEventType(type: string): string {
 
 /* 设置时间轴最大高度并启用垂直滚动 */
 .scrollable-timeline {
-  max-height: 60vh; /* 控制最大可视区域高度 */
-  overflow-y: auto; /* 启用垂直滚动 */
-  scrollbar-width: thin; /* Firefox：窄滚动条 */
+  max-height: 60vh;
+  /* 控制最大可视区域高度 */
+  overflow-y: auto;
+  /* 启用垂直滚动 */
+  scrollbar-width: thin;
+  /* Firefox：窄滚动条 */
 }
 
 /* hover效果微调 */

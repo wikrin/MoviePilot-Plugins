@@ -22,7 +22,7 @@ const defaultConfig = reactive({
   interval_minutes: 15,
   calname: '追剧日历',
   cron: '',
-  dashboard_size : 6,
+  dashboard_size: 6,
 })
 
 const config = reactive({ ...defaultConfig })
@@ -159,7 +159,7 @@ function resetForm() {
   }
 }
 
-onMounted (() => {
+onMounted(() => {
   // 加载初始配置
   if (props.initialConfig) {
     Object.keys(props.initialConfig).forEach(key => {
@@ -194,31 +194,20 @@ onMounted (() => {
                       <v-icon icon="mdi-power" size="small" :color="config.enabled ? 'info' : 'grey'" class="mr-3" />
                       <span class="text-subtitle-2">启用插件</span>
                     </div>
-                    <v-switch
-                      v-model="config.enabled"
-                      color="info"
-                      inset
-                      density="compact"
-                      hide-details
-                      class="small-switch"
-                    />
+                    <v-switch v-model="config.enabled" color="info" inset density="compact" hide-details
+                      class="small-switch" />
                   </div>
                 </v-col>
                 <!--  -->
                 <v-col cols="12" md="4" class="pr-md-2 pb-2">
                   <div class="setting-item d-flex align-center justify-space-between pa-3 bg-grey-lighten-3 rounded">
                     <div class="d-flex align-center">
-                      <v-icon icon="mdi-history" size="small" :color="config.calc_time ? 'info' : 'grey'" class="mr-3" />
+                      <v-icon icon="mdi-history" size="small" :color="config.calc_time ? 'info' : 'grey'"
+                        class="mr-3" />
                       <span class="text-subtitle-2">使用下载记录补充时间</span>
                     </div>
-                    <v-switch
-                      v-model="config.calc_time"
-                      color="info"
-                      inset
-                      density="compact"
-                      hide-details
-                      class="small-switch"
-                    />
+                    <v-switch v-model="config.calc_time" color="info" inset density="compact" hide-details
+                      class="small-switch" />
                   </div>
                 </v-col>
                 <v-col cols="12" md="4" class="pr-md-2 pb-2">
@@ -227,14 +216,8 @@ onMounted (() => {
                       <v-icon icon="mdi-update" size="small" :color="config.enabled ? 'info' : 'grey'" class="mr-3" />
                       <span class="text-subtitle-2">立即更新一次</span>
                     </div>
-                    <v-switch
-                      v-model="config.onlyonce"
-                      color="info"
-                      inset
-                      density="compact"
-                      hide-details
-                      class="small-switch"
-                    />
+                    <v-switch v-model="config.onlyonce" color="info" inset density="compact" hide-details
+                      class="small-switch" />
                   </div>
                 </v-col>
               </v-row>
@@ -245,12 +228,8 @@ onMounted (() => {
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">日历名称</span>
                     </div>
-                    <v-text-field
-                      v-model.number="config.calname"
-                      density="compact"
-                      hide-details
-                      style="max-width: 150px"
-                    />
+                    <v-text-field v-model.number="config.calname" density="compact" hide-details
+                      style="max-width: 150px" />
                   </div>
                 </v-col>
                 <v-col cols="12" md="3" class="pl-md-2 pb-2">
@@ -258,12 +237,8 @@ onMounted (() => {
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">时间取整间隔(分钟)</span>
                     </div>
-                    <v-text-field
-                      v-model.number="config.interval_minutes"
-                      density="compact"
-                      hide-details
-                      style="max-width: 150px"
-                    />
+                    <v-text-field v-model.number="config.interval_minutes" density="compact" hide-details
+                      style="max-width: 150px" />
                   </div>
                 </v-col>
                 <v-col cols="12" md="3" class="pl-md-2 pb-2">
@@ -271,13 +246,8 @@ onMounted (() => {
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">数据更新周期</span>
                     </div>
-                    <v-text-field
-                      v-model.number="config.cron"
-                      density="compact"
-                      hide-details
-                      placeholder="留空自动"
-                      style="max-width: 150px"
-                    />
+                    <v-text-field v-model.number="config.cron" density="compact" hide-details placeholder="留空自动"
+                      style="max-width: 150px" />
                   </div>
                 </v-col>
                 <v-col cols="12" md="3" class="pl-md-2 pb-2">
@@ -285,12 +255,8 @@ onMounted (() => {
                     <div class="d-flex align-center">
                       <span class="text-subtitle-2">仪表盘宽度</span>
                     </div>
-                    <v-text-field
-                      v-model.number="config.dashboard_size"
-                      density="compact"
-                      hide-details
-                      placeholder="留空自动"
-                    />
+                    <v-text-field v-model.number="config.dashboard_size" density="compact" hide-details
+                      placeholder="留空自动" />
                   </div>
                 </v-col>
               </v-row>
@@ -300,29 +266,18 @@ onMounted (() => {
           <v-divider class="my-4" />
           <v-row>
             <v-col cols="4" md="2">
-              <v-btn color="primary" :disabled="!isFormValid || saving" @click="downloadICS" :loading="saving" prepend-icon="mdi-download" variant="tonal">下载ICS文件</v-btn>
+              <v-btn color="primary" :disabled="!isFormValid || saving" @click="downloadICS" :loading="saving"
+                prepend-icon="mdi-download" variant="tonal">下载ICS文件</v-btn>
             </v-col>
             <v-col cols="20" md="10">
               <!-- 输入框与按钮行 -->
               <div class="d-flex align-center mb-2">
                 <!-- 输入框 -->
-                <v-text-field
-                  v-model="SystemSettings.Basic.APP_DOMAIN"
-                  label="iCal订阅链接"
-                  density="compact"
-                  placeholder="DOMAIN:PORT 或 IP:PORT"
-                  hide-details
-                  class="flex-grow-1"
-                />
+                <v-text-field v-model="SystemSettings.Basic.APP_DOMAIN" label="iCal订阅链接" density="compact"
+                  placeholder="DOMAIN:PORT 或 IP:PORT" hide-details class="flex-grow-1" />
                 <!-- 复制按钮 -->
-                <v-btn
-                  icon="mdi-content-copy"
-                  size="small"
-                  variant="text"
-                  color="primary"
-                  @click="copyUrl"
-                />
-                </div>
+                <v-btn icon="mdi-content-copy" size="small" variant="text" color="primary" @click="copyUrl" />
+              </div>
             </v-col>
           </v-row>
 
@@ -338,8 +293,10 @@ onMounted (() => {
 
           <v-card-actions class="px-2 py-1">
             <v-spacer></v-spacer>
-            <v-btn color="secondary" variant="text" @click="resetForm" prepend-icon="mdi-restore" size="small">恢复默认</v-btn>
-            <v-btn color="primary" :disabled="!isFormValid || saving" @click="saveConfig" :loading="saving" prepend-icon="mdi-content-save" variant="text" size="small">保存配置</v-btn>
+            <v-btn color="secondary" variant="text" @click="resetForm" prepend-icon="mdi-restore"
+              size="small">恢复默认</v-btn>
+            <v-btn color="primary" :disabled="!isFormValid || saving" @click="saveConfig" :loading="saving"
+              prepend-icon="mdi-content-save" variant="text" size="small">保存配置</v-btn>
             <v-btn color="grey" @click="emit('close')" prepend-icon="mdi-close" variant="text" size="small">关闭</v-btn>
           </v-card-actions>
         </v-form>
@@ -405,7 +362,7 @@ onMounted (() => {
 .config-card {
   /* 背景渐变，包含主背景和重复渐变效果 */
   background-image: linear-gradient(to right, rgba(var(--v-theme-surface), 0.98), rgba(var(--v-theme-surface), 0.95)),
-                    repeating-linear-gradient(45deg, rgba(var(--v-theme-primary), 0.03), rgba(var(--v-theme-primary), 0.03) 10px, transparent 10px, transparent 20px);
+    repeating-linear-gradient(45deg, rgba(var(--v-theme-primary), 0.03), rgba(var(--v-theme-primary), 0.03) 10px, transparent 10px, transparent 20px);
   background-attachment: fixed;
   box-shadow: 0 1px 2px rgba(var(--v-border-color), 0.05) !important;
   transition: all 0.3s ease;
