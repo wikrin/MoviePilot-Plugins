@@ -38,5 +38,18 @@
     "history": {
       "2.0.0": "迁移至 V3 SDK 与模块布局, 增加 Gist 同步功能, 修复移动设备仪表盘组件显示问题"
     }
+  },
+  "TorrentFormatter": {
+    "name": "种子格式化",
+    "description": "根据自定义格式修改MP下载种子的保存路径、种子名称、种子文件名(实验功能)",
+    "labels": "文件管理, 下载管理, 重命名",
+    "version": "2.0.0",
+    "system_version": ">=3.0.0",
+    "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png",
+    "author": "Attente",
+    "level": 1,
+    "history": {
+      "3.0.0": "迁移至 V3 SDK 与模块布局"
+    }
   }
 }
