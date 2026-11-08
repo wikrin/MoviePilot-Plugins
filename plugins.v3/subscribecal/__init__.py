@@ -34,7 +34,19 @@ TZ = pytz.timezone(settings.TZ)
 
 @dataclass
 class CalendarInfo:
-    """剧集信息"""
+    """
+    剧集信息
+    :param release_date: 发布日期
+    :param air_date: 播出日期
+    :param episode_number: 集号(剧集组下不可靠)
+    :param episode_type: 集状态
+    :param title: 标题(季/电影)
+    :param name: 集标题
+    :param id: unique ID
+    :param overview: 集简介
+    :param runtime: 时长
+    :param season_number: 季号
+    """
 
     # 发布日期
     release_date: str | None = None
@@ -68,8 +80,7 @@ class CalendarInfo:
         """utc时间"""
         return (
             TZ.localize(
-                datetime.datetime.strptime(self.air_date, "%Y-%m-%d")
-                + datetime.timedelta(minutes=dalay_minutes or 0)
+                datetime.datetime.strptime(self.air_date, "%Y-%m-%d") + datetime.timedelta(minutes=dalay_minutes or 0)
             )
             .astimezone(pytz.utc)
             .strftime("%Y%m%dT%H%M%SZ")
@@ -77,7 +88,22 @@ class CalendarInfo:
 
 
 class CalendarEvent(BaseModel):
-    """日历事件"""
+    """
+    日历事件
+    :param created: 创建时间
+    :param dtstart: 开始时间
+    :param dtend: 结束时间
+    :param summary: 标题
+    :param description: 描述(备注)
+    :param season: 季
+    :param episode: 集
+    :param location: 地点
+    :param uid: 唯一标识
+    :param transp: 类型
+    :param sequence: 序号
+    :param status: 状态
+    :param last_modified: 最后修改时间
+    """
 
     # 创建时间
     created: str | None = None
@@ -207,7 +233,24 @@ class CalendarEvent(BaseModel):
 
 
 class TimeLineItem(BaseModel):
-    """时间轴条目"""
+    """
+    时间轴条目
+    :param id: 订阅表ID
+    :param dtstart: 起始时间
+    :param dtend: 结束时间
+    :param summary: 标题
+    :param description: 描述
+    :param location: 地点
+    :param uid: 唯一标识
+    :param year: 年份
+    :param type: 类型
+    :param season: 季号
+    :param episode: 集号
+    :param poster: 海报
+    :param backdrop: 背景图
+    :param vote: 评分，float
+    :param state: 状态：N-新建 R-订阅中 P-待定 S-暂停
+    """
 
     # 订阅表ID
     id: int
@@ -244,6 +287,10 @@ class TimeLineItem(BaseModel):
 class SubscribeCalConfigStatus(BaseModel):
     """
     订阅日历配置页使用的域名与 Gist 状态。
+    :param public_domain: 公网订阅地址使用的域名
+    :param public_url: 已包含后端 API key 的完整公网订阅地址
+    :param gist_url: 已绑定的 Gist 原始订阅地址；未绑定时为空
+    :param gist_available: 主项目 Token 是否已确认可用于 Gist 同步；null 表示仍在检查
     """
 
     public_domain: str = Field(description="公网订阅地址使用的域名")
@@ -256,7 +303,11 @@ class SubscribeCalConfigStatus(BaseModel):
 
 
 class SubscribeCalGistStatus(BaseModel):
-    """订阅日历的 GitHub Gist 检查结果。"""
+    """
+    订阅日历的 GitHub Gist 检查结果。
+    :param available: 主项目 Token 是否可用于当前 Gist 操作
+    :param message: Gist 权限检查结果说明
+    """
 
     available: bool = Field(description="主项目 Token 是否可用于当前 Gist 操作")
     message: str = Field(description="Gist 权限检查结果说明")
@@ -265,36 +316,40 @@ class SubscribeCalGistStatus(BaseModel):
 class SubscribeCalConfig(BaseModel):
     """
     订阅日历插件的运行配置。
-
-    忽略未声明的历史配置项；加载部分配置时保留模型中已有的其他设置。
-
-    :cvar model_config: 忽略配置字典中未声明的字段
+    :param enabled: 是否启用订阅日历
+    :param onlyonce: 是否在初始化后立即执行一次更新
+    :param cron: 日历数据刷新的 Cron 表达式；为空时每 12 小时刷新
+    :param calc_time: 是否根据下载记录推算剧集播出时间
+    :param calname: 生成的日历名称
+    :param interval_minutes: 推算播出时间时使用的分钟取整间隔
+    :param dashboard_size: 插件仪表盘占用的宽度
+    :param gist_enabled: 是否在日历更新后同步到 GitHub Gist
+    :param gist_id: 已绑定的 GitHub Gist 标识；为空时创建新 Gist
+    :param gist_url: 已绑定 Gist 中日历文件的原始订阅地址
     """
 
     model_config = ConfigDict(extra="ignore")
 
-    enabled: bool = Field(default=False, description="是否启用订阅日历")
-    onlyonce: bool = Field(default=False, description="是否在初始化后立即执行一次更新")
-    cron: str = Field(
-        default="", description="日历数据刷新的 Cron 表达式；为空时每 12 小时刷新"
-    )
-    calc_time: bool = Field(
-        default=False, description="是否根据下载记录推算剧集播出时间"
-    )
-    calname: str = Field(default="追剧日历", description="生成的日历名称")
-    interval_minutes: int = Field(
-        default=15, description="推算播出时间时使用的分钟取整间隔"
-    )
-    dashboard_size: int = Field(default=6, description="插件仪表盘占用的宽度")
-    gist_enabled: bool = Field(
-        default=False, description="是否在日历更新后同步到 GitHub Gist"
-    )
-    gist_id: str = Field(
-        default="", description="已绑定的 GitHub Gist 标识；为空时创建新 Gist"
-    )
-    gist_url: str = Field(
-        default="", description="已绑定 Gist 中日历文件的原始订阅地址"
-    )
+    # 启用插件
+    enabled: bool = Field(default=False)
+    # 立即执行一次更新
+    onlyonce: bool = Field(default=False)
+    # 日历数据刷新的 Cron 表达式
+    cron: str = Field(default="")
+    # 根据下载记录推算剧集播出时间
+    calc_time: bool = Field(default=False)
+    # 日历名称
+    calname: str = Field(default="追剧日历")
+    # 推算播出时间时使用的分钟取整间隔
+    interval_minutes: int = Field(default=15)
+    # 插件仪表盘占用的宽度
+    dashboard_size: int = Field(default=6)
+    # 是否在日历更新后同步到 GitHub Gist
+    gist_enabled: bool = Field(default=False)
+    # 已绑定的 GitHub Gist 标识；为空时创建新 Gist
+    gist_id: str = Field(default="")
+    # 已绑定 Gist 中日历文件的原始订阅地址
+    gist_url: str = Field(default="")
 
 
 class SubscribeCal(_PluginBase):
@@ -305,7 +360,7 @@ class SubscribeCal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/calendar_a.png"
     # 插件版本
-    plugin_version = "2.0.0"
+    plugin_version = "2.0.1"
     # 插件作者
     plugin_author = "Attente"
     # 作者主页
@@ -335,9 +390,7 @@ class SubscribeCal(_PluginBase):
 
     def load_config(self, config: dict):
         """加载配置"""
-        self.config = SubscribeCalConfig(
-            **{**self.config.model_dump(), **(config or {})}
-        )
+        self.config = SubscribeCalConfig(**{**self.config.model_dump(), **(config or {})})
 
     def schedule_once(self):
         """调度一次性任务"""
@@ -346,8 +399,7 @@ class SubscribeCal(_PluginBase):
         self._scheduler.add_job(
             func=self.full_update,
             trigger="date",
-            run_date=datetime.datetime.now(tz=pytz.timezone(settings.TZ))
-            + datetime.timedelta(seconds=3),
+            run_date=datetime.datetime.now(tz=pytz.timezone(settings.TZ)) + datetime.timedelta(seconds=3),
         )
         self._scheduler.start()
 
@@ -371,11 +423,7 @@ class SubscribeCal(_PluginBase):
         注册插件公共服务
         """
         if self.config.enabled:
-            trigger = (
-                CronTrigger.from_crontab(self.config.cron)
-                if self.config.cron
-                else "interval"
-            )
+            trigger = CronTrigger.from_crontab(self.config.cron) if self.config.cron else "interval"
             kwargs = {"hours": 12} if not self.config.cron else {}
             return [
                 {
@@ -487,9 +535,7 @@ class SubscribeCal(_PluginBase):
     def get_state(self):
         return self.config.enabled
 
-    def get_dashboard(
-        self, key: str, **kwargs
-    ) -> tuple[dict[str, Any], dict[str, Any], list[dict] | None] | None:
+    def get_dashboard(self, key: str, **kwargs) -> tuple[dict[str, Any], dict[str, Any], list[dict] | None] | None:
         """
         获取插件仪表盘页面，需要返回：1、仪表板col配置字典；2、全局配置（布局、自动刷新等）；3、仪表板页面元素配置含数据json（vuetify）或 None（vue模式）
         """
@@ -504,9 +550,7 @@ class SubscribeCal(_PluginBase):
             None,
         )
 
-    def iter_ics_content(
-        self, calevent: dict[str, CalendarEvent] | None = None
-    ) -> Iterator[str]:
+    def iter_ics_content(self, calevent: dict[str, CalendarEvent] | None = None) -> Iterator[str]:
         """
         逐段生成 ICS 内容，避免下载时构造完整字符串。
 
@@ -529,9 +573,7 @@ class SubscribeCal(_PluginBase):
     def get_ics(self):
         """获取ics内容"""
         _events = self.get_events(self.keys)
-        return Response(
-            content=self.generate_ics_content(_events), media_type="text/calendar"
-        )
+        return Response(content=self.generate_ics_content(_events), media_type="text/calendar")
 
     def download_ics(self) -> responses.StreamingResponse:
         """获取ics内容"""
@@ -567,9 +609,7 @@ class SubscribeCal(_PluginBase):
             user_response = client.get_res(f"{GITHUB_API_URL}/user")
             if not user_response or user_response.status_code != 200:
                 status_code = user_response.status_code if user_response else "无响应"
-                logger.warning(
-                    f"订阅日历 Gist 检查失败：GitHub 用户接口返回 {status_code}"
-                )
+                logger.warning(f"订阅日历 Gist 检查失败：GitHub 用户接口返回 {status_code}")
                 return (
                     None,
                     None,
@@ -584,15 +624,11 @@ class SubscribeCal(_PluginBase):
                 return None, None, False, False, "GitHub 未返回当前 Token 的用户信息。"
 
             granted_scopes = {
-                scope.strip()
-                for scope in user_response.headers.get("X-OAuth-Scopes", "").split(",")
-                if scope.strip()
+                scope.strip() for scope in user_response.headers.get("X-OAuth-Scopes", "").split(",") if scope.strip()
             }
             gist_permission = "gist" in granted_scopes if granted_scopes else None
             if gist_permission is False:
-                logger.warning(
-                    f"订阅日历 Gist 检查失败：GitHub 用户 {login} 的 Token 缺少 gist 权限"
-                )
+                logger.warning(f"订阅日历 Gist 检查失败：GitHub 用户 {login} 的 Token 缺少 gist 权限")
                 return (
                     client,
                     login,
@@ -603,16 +639,10 @@ class SubscribeCal(_PluginBase):
 
             gist_bound = not self.config.gist_id
             if self.config.gist_id:
-                existing_response = client.get_res(
-                    f"{GITHUB_API_URL}/gists/{self.config.gist_id}"
-                )
+                existing_response = client.get_res(f"{GITHUB_API_URL}/gists/{self.config.gist_id}")
                 if not existing_response or existing_response.status_code != 200:
-                    status_code = (
-                        existing_response.status_code if existing_response else "无响应"
-                    )
-                    logger.warning(
-                        f"订阅日历 Gist 检查失败：读取已绑定 Gist 返回 {status_code}"
-                    )
+                    status_code = existing_response.status_code if existing_response else "无响应"
+                    logger.warning(f"订阅日历 Gist 检查失败：读取已绑定 Gist 返回 {status_code}")
                     return (
                         client,
                         login,
@@ -623,9 +653,7 @@ class SubscribeCal(_PluginBase):
                 existing_gist = existing_response.json()
                 owner = (existing_gist.get("owner") or {}).get("login")
                 if owner != login:
-                    logger.warning(
-                        f"订阅日历 Gist 检查失败：已绑定 Gist 与当前用户 {login} 不匹配"
-                    )
+                    logger.warning(f"订阅日历 Gist 检查失败：已绑定 Gist 与当前用户 {login} 不匹配")
                     return (
                         client,
                         login,
@@ -634,9 +662,7 @@ class SubscribeCal(_PluginBase):
                         "已绑定的 Gist 不属于当前 GitHub Token 用户。",
                     )
                 if existing_gist.get("public") is not False:
-                    logger.warning(
-                        "订阅日历 Gist 检查失败：已绑定 Gist 不是 Secret 状态"
-                    )
+                    logger.warning("订阅日历 Gist 检查失败：已绑定 Gist 不是 Secret 状态")
                     return (
                         client,
                         login,
@@ -647,9 +673,7 @@ class SubscribeCal(_PluginBase):
                 gist_bound = True
 
             if gist_permission is None:
-                logger.info(
-                    f"订阅日历 Gist 权限无法预检：GitHub 用户 {login}，已绑定 Gist={gist_bound}"
-                )
+                logger.info(f"订阅日历 Gist 权限无法预检：GitHub 用户 {login}，已绑定 Gist={gist_bound}")
                 return (
                     client,
                     login,
@@ -657,9 +681,7 @@ class SubscribeCal(_PluginBase):
                     gist_bound,
                     "Token 有效，但无法预检其 Gist 写权限；请改用包含 gist scope 的 Token。",
                 )
-            logger.info(
-                f"订阅日历 Gist 权限检查通过：GitHub 用户 {login}，已绑定 Gist={gist_bound}"
-            )
+            logger.info(f"订阅日历 Gist 权限检查通过：GitHub 用户 {login}，已绑定 Gist={gist_bound}")
             return (
                 client,
                 login,
@@ -671,9 +693,7 @@ class SubscribeCal(_PluginBase):
             logger.error(f"检查 GitHub Gist 权限失败：{error!s}")
             return None, None, False, False, "暂时无法检查 GitHub Token 和 Gist 权限。"
 
-    def iter_config_status(
-        self, domain: str | None = None, check_gist: bool | None = None
-    ) -> Iterator[str]:
+    def iter_config_status(self, domain: str | None = None, check_gist: bool | None = None) -> Iterator[str]:
         """
         先输出公网订阅地址，再输出 Gist 网络检查结果。
 
@@ -734,9 +754,7 @@ class SubscribeCal(_PluginBase):
 
         :return: 是否同步成功及可订阅的 ICS 地址
         """
-        client, login, gist_permission, gist_bound, message = (
-            self._github_gist_context()
-        )
+        client, login, gist_permission, gist_bound, message = self._github_gist_context()
         if gist_permission is False:
             logger.warning(f"订阅日历 Gist 同步已取消：{message}")
             return ApiResponse(success=False, message=message)
@@ -770,9 +788,7 @@ class SubscribeCal(_PluginBase):
                 status_code = response.status_code if response else "无响应"
                 logger.warning(f"GitHub Gist {action}失败：接口返回 {status_code}")
                 if response and response.status_code == 403:
-                    message = (
-                        "GitHub Token 没有创建或更新 Gist 的权限，请检查 gist 权限。"
-                    )
+                    message = "GitHub Token 没有创建或更新 Gist 的权限，请检查 gist 权限。"
                 else:
                     message = "GitHub Gist 同步失败，请检查 Token 权限及网络连接。"
                 return ApiResponse(success=False, message=message)
@@ -785,8 +801,7 @@ class SubscribeCal(_PluginBase):
                     message="GitHub 返回的 Gist 不是 Secret 状态，已停止保存订阅地址。",
                 )
             self.config.gist_id = gist_data["id"]
-            files = gist_data.get("files") or {}
-            self.config.gist_url = (files.get(gist_filename) or {}).get("raw_url") or (
+            self.config.gist_url = (
                 f"https://gist.githubusercontent.com/{login}/{self.config.gist_id}/raw/{gist_filename}"
             )
             self.__update_config()
@@ -876,9 +891,7 @@ class SubscribeCal(_PluginBase):
         else:
             logger.warning(f"订阅日历未找到新增订阅记录：订阅 ID {subscribe_id}")
 
-    def search_sub(
-        self, sub: Subscribe, cache: bool = True
-    ) -> list[CalendarInfo] | None:
+    def search_sub(self, sub: Subscribe, cache: bool = True) -> list[CalendarInfo] | None:
         """搜索订阅"""
         cache_params = {"key": self.get_sub_key(sub), "region": self._search_sub_region}
         info = None
@@ -891,9 +904,7 @@ class SubscribeCal(_PluginBase):
             )
             with fresh(not cache):
                 if sub.episode_group and (
-                    result := TmdbApi().get_tv_group_detail(
-                        group_id=sub.episode_group, season=sub.season
-                    )
+                    result := TmdbApi().get_tv_group_detail(group_id=sub.episode_group, season=sub.season)
                 ):
                     # 将剧集组中季号更新为当前季
                     list(
@@ -909,14 +920,10 @@ class SubscribeCal(_PluginBase):
                         season=sub.season,
                     )
             if result:
-                info = [
-                    CalendarInfo(**info) for info in result.get("episodes", [result])
-                ]
+                info = [CalendarInfo(**info) for info in result.get("episodes", [result])]
         if info:
             result_cache.set(value=info, **cache_params)
-            logger.debug(
-                f"{sub.name} ({sub.year}) 获取到 {len(info)} 条媒体信息并已缓存"
-            )
+            logger.debug(f"{sub.name} ({sub.year}) 获取到 {len(info)} 条媒体信息并已缓存")
         else:
             logger.warning(f"{sub.name} ({sub.year}) 未获取到媒体信息")
         return info
@@ -975,18 +982,14 @@ class SubscribeCal(_PluginBase):
             cal.episode = epinfo.episode_number
             event_data[str(epinfo.id)] = cal
         # 保存事件数据
-        self.save_data(
-            key=_key, value={k: v.model_dump() for k, v in event_data.items()}
-        )
+        self.save_data(key=_key, value={k: v.model_dump() for k, v in event_data.items()})
         logger.info(
             f"{title_year} 日历事件处理完成：写入 {total_episodes - skipped_missing_air_date} 条，"
             f"跳过无播出日期 {skipped_missing_air_date} 条"
         )
         return _key
 
-    def get_grouped_events(
-        self, before_days: int = 3, after_days: int = 3
-    ) -> list[TimeLineItem]:
+    def get_grouped_events(self, before_days: int = 3, after_days: int = 3) -> list[TimeLineItem]:
         """
         返回给前端特定数据
         """
@@ -1004,18 +1007,14 @@ class SubscribeCal(_PluginBase):
             for _, epinfo in event_data.items():
                 date = self.format_date_from_dtstart(epinfo.dtstart)
                 if date in date_range:
-                    timeline_items.append(
-                        TimeLineItem(**{**sub.to_dict(), **epinfo.model_dump()})
-                    )
+                    timeline_items.append(TimeLineItem(**{**sub.to_dict(), **epinfo.model_dump()}))
 
         return timeline_items
 
     @staticmethod
     def compute_median_runtime(cal_items: list[CalendarInfo]):
         try:
-            return statistics.median(
-                [item.runtime for item in cal_items if item.runtime]
-            )
+            return statistics.median([item.runtime for item in cal_items if item.runtime])
         except Exception as e:
             logger.error(f"获取剧集时长中位数失败: {e}")
             return None
@@ -1040,10 +1039,7 @@ class SubscribeCal(_PluginBase):
         :return: 包含日期字符串的集合，如 {'2025-04-04', '2025-04-05', '2025-04-06'}
         """
         today = datetime.date.today()
-        date_list = [
-            (today + datetime.timedelta(days=i))
-            for i in range(-before_days, after_days + 1)
-        ]
+        date_list = [(today + datetime.timedelta(days=i)) for i in range(-before_days, after_days + 1)]
         return {str(date) for date in date_list}
 
     def save_events(self, value: dict[str, dict[str, CalendarEvent]]):
@@ -1067,9 +1063,7 @@ class SubscribeCal(_PluginBase):
             events.update(self.get_event_data(key=key))
         return events
 
-    def generate_average_time(
-        self, sub: Subscribe, cal_info: list[CalendarInfo]
-    ) -> float:
+    def generate_average_time(self, sub: Subscribe, cal_info: list[CalendarInfo]) -> float:
         """
         计算剧集播放时间
         :param sub: Subscribe对象
@@ -1077,9 +1071,7 @@ class SubscribeCal(_PluginBase):
         :return: float (分钟)
         """
 
-        def verify_downloadhis_note(
-            note: dict[str, str], source: str = "Subscribe"
-        ) -> bool:
+        def verify_downloadhis_note(note: dict[str, str], source: str = "Subscribe") -> bool:
             """
             验证下载记录note是否符合预期
             """
@@ -1135,16 +1127,10 @@ class SubscribeCal(_PluginBase):
             else:
                 # 数据波动较大时，使用加权平均
                 weights = [
-                    1.0
-                    - (
-                        abs(x - statistics.median(best_cluster))
-                        / (max(best_cluster) - min(best_cluster))
-                    )
+                    1.0 - (abs(x - statistics.median(best_cluster)) / (max(best_cluster) - min(best_cluster)))
                     for x in best_cluster
                 ]
-                result = sum(x * w for x, w in zip(best_cluster, weights)) / sum(
-                    weights
-                )
+                result = sum(x * w for x, w in zip(best_cluster, weights)) / sum(weights)
                 method = "密集区间加权平均"
 
             logger.info(
@@ -1177,12 +1163,8 @@ class SubscribeCal(_PluginBase):
             # 将订阅日期字符串转为datetime对象
             sub_date = datetime.datetime.strptime(sub.date, "%Y-%m-%d %H:%M:%S")
             for history in histories:
-                history_date = datetime.datetime.strptime(
-                    history.date, "%Y-%m-%d %H:%M:%S"
-                )
-                if (
-                    not (history_date - sub_date).total_seconds() < 60 * 10
-                ):  # 排除订阅添加后的首次更新
+                history_date = datetime.datetime.strptime(history.date, "%Y-%m-%d %H:%M:%S")
+                if not (history_date - sub_date).total_seconds() < 60 * 10:  # 排除订阅添加后的首次更新
                     eps = history.episodes.split("-")
                     episodes = range(int(eps[0][1:]), int(eps[-1][1:]) + 1)
                     for ep in episodes:
@@ -1198,9 +1180,7 @@ class SubscribeCal(_PluginBase):
                     if prev_value is not None and current_value > prev_value:
                         # 当前值大于前一个值，则排除该键
                         del _his_dt[key]
-                        logger.info(
-                            f"{sub.name} - 第 {key} 集 疑似订阅补全记录，已排除, 下载日期: {current_value}"
-                        )
+                        logger.info(f"{sub.name} - 第 {key} 集 疑似订阅补全记录，已排除, 下载日期: {current_value}")
                         continue
 
                     # 更新记录值
@@ -1211,9 +1191,7 @@ class SubscribeCal(_PluginBase):
             # 处理为分钟
             delay_time = [
                 self.quantize_to_interval(
-                    (
-                        _dt - datetime.datetime.strptime(_eps_dt[_ep], "%Y-%m-%d")
-                    ).total_seconds()
+                    (_dt - datetime.datetime.strptime(_eps_dt[_ep], "%Y-%m-%d")).total_seconds()
                     / 60,  # 得出每集的延迟时间(分钟)
                     self.config.interval_minutes,
                 )  # 转换为分钟并向下取整

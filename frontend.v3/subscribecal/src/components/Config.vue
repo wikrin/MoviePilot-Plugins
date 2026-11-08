@@ -137,15 +137,18 @@ async function syncGist() {
     if (!response.success) {
       gistStatus.available = false
       gistStatus.message = response.message
+      showNotification(response.message || 'Gist 同步失败。', 'error')
       return
     }
     config.gist_url = response.data
     gistStatus.available = true
     gistStatus.message = response.message
+    showNotification(response.message || 'Gist 同步成功。', 'success')
   } catch (err) {
     console.error('Gist 同步请求失败:', err)
     gistStatus.available = false
     gistStatus.message = err instanceof Error ? err.message : 'Gist 同步失败。'
+    showNotification(gistStatus.message, 'error')
   } finally {
     syncingGist.value = false
   }
