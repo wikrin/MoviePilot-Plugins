@@ -1,375 +1,303 @@
-<script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+<script setup>
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import FormatterShell from './FormatterShell.vue'
+import RuleEditor from './RuleEditor.vue'
+import { createTorrentFormatterApi, DEFAULT_RULES, errorMessage } from '../api/torrentformatter.js'
 
 const props = defineProps({
-  api: {
-    type: Object,
-    required: true,
-  },
-  initialConfig: {
-    type: Object,
-    default: () => ({}),
-  }
-});
-
-const emit = defineEmits(['close', 'switch', 'save']);
-
-// 插件默认配置
-const defaultConfig = reactive({
+  api: { type: Object, required: true },
+  initialConfig: { type: Object, default: () => ({}) },
+})
+const emit = defineEmits(['close', 'switch', 'save', 'layout'])
+const defaults = {
+  ...DEFAULT_RULES,
   cron_enabled: false,
   downloader: [],
-  exclude_dirs: "",
-  exclude_tags: "",
-  cron: "",
+  exclude_dirs: '',
+  exclude_tags: '',
+  cron: '',
   event_enabled: false,
-  rename_torrent: false,
-  rename_file: false,
-  format_torrent_name: "{{ title }}{% if year %} ({{ year }}){% endif %}{% if season_episode %} - {{season_episode}}{% endif %}",
-  format_save_path: "{{title}}{% if year %} ({{year}}){% endif %}",
-  format_movie_path: "{{title}}{% if year %} ({{year}}){% endif %}{% if part %}-{{part}}{% endif %}{% if videoFormat %} - {{videoFormat}}{% endif %}{{fileExt}}",
-  format_tv_path: "Season {{season}}/{{title}} - {{season_episode}}{% if part %}-{{part}}{% endif %}{% if episode %} - 第 {{episode}} 集{% endif %}{{fileExt}}",
-});
-
-const downloaderOptions = ref<{ title: string; value: string }[]>([])
-const config = reactive({ ...defaultConfig })
-
-const form = ref<{ validate: () => Promise<{ valid: boolean }>; resetValidation: () => void } | null>(null);
-const isFormValid = ref(true);
-const error = ref<string | null>(null);
-const successMessage = ref<string | null>(null);
-const saving = ref(false);
-const _tabs = ref('basic_tab');
-
-
-// 加载所有下载器
-async function loadDownloaderSetting() {
-  try {
-    const { data: downloaders } = await props.api.get('download/clients')
-    downloaderOptions.value = [
-      ...downloaders.map((item: { name: any }) => ({
-        title: item.name,
-        value: item.name,
-      })),
-    ]
-  } catch (error) {
-    console.error('加载下载器设置失败:', error)
-  }
 }
+const clone = value => JSON.parse(JSON.stringify(value))
+const config = reactive(clone(defaults))
+const baseline = ref(clone(defaults))
+const section = ref('automation')
+const clients = ref([])
+const loading = ref(false)
+const error = ref('')
+const submitted = ref(false)
+const form = ref(null)
+const changed = computed(() =>
+  Object.keys(defaults).filter(key => JSON.stringify(config[key]) !== JSON.stringify(baseline.value[key])),
+)
+const naming = computed({
+  get: () => Object.fromEntries(Object.keys(DEFAULT_RULES).map(key => [key, config[key]])),
+  set: value => Object.assign(config, value),
+})
+const sections = [
+  { id: 'automation', title: '工作方式', subtitle: '事件与定时扫描' },
+  { id: 'exclusions', title: '排除与保护', subtitle: '目录、标签及风险' },
+  { id: 'naming', title: '命名规则', subtitle: '全局模板与开关' },
+]
+const cronRules = [
+  value =>
+    !config.cron_enabled ||
+    !value ||
+    /^[\d\w*,/-]+(?:\s+[\d\w*,/-]+){4}$/.test(value.trim()) ||
+    '请输入 5 段 Cron 表达式，如 0 8 * * *',
+]
 
-// 保存配置
-async function saveConfig() {
-  saving.value = true
-  error.value = null
+watch(
+  () => props.initialConfig,
+  value => {
+    Object.assign(config, clone({ ...defaults, ...value, downloader: [...(value.downloader || [])] }))
+    baseline.value = clone(config)
+    submitted.value = false
+  },
+  { deep: true, immediate: true },
+)
 
+async function loadClients() {
+  loading.value = true
+  error.value = ''
   try {
-    emit('save', { ...config })
-    successMessage.value = '配置保存成功'
+    clients.value = await createTorrentFormatterApi(props.api).downloaders()
   } catch (err) {
-    console.error('保存配置失败:', err)
-    error.value = err instanceof Error ? err.message : '保存配置失败'
+    error.value = errorMessage(err, '下载器列表加载失败')
   } finally {
-    saving.value = false
+    loading.value = false
   }
 }
-
-// 重置表单
-function resetForm() {
-  Object.assign(config, defaultConfig)
-
-  if (form.value) {
-    form.value.resetValidation()
-  }
+async function save() {
+  const validation = await form.value?.validate()
+  if (validation?.valid === false) return
+  // emit 只提交请求，不能宣称已持久化；实际保存结果由宿主通知。
+  emit('save', clone(config))
+  submitted.value = true
 }
-
-// 初始化配置
+function reset() {
+  Object.assign(config, clone({ ...config, ...defaults }))
+  submitted.value = false
+  form.value?.resetValidation()
+}
 onMounted(() => {
-  // 加载初始配置
-  Object.assign(config, props.initialConfig)
-  // 加载下载器设置
-  loadDownloaderSetting()
+  emit('layout', { maxWidth: '96rem' })
+  void loadClients()
 })
 </script>
 
 <template>
-  <div class="plugin-config">
-    <v-card flat class="rounded border">
-      <!-- 标题区域 -->
-      <v-card-title class="text-subtitle-1 d-flex align-center px-3 py-2 bg-primary-lighten-5">
-        <v-icon icon="mdi-cog" class="mr-2" color="primary" size="small" />
-        <span>种子格式化配置</span>
-      </v-card-title>
-      <v-card-text class="px-3 py-2">
-        <v-alert v-if="error" type="error" density="compact" class="mb-2 text-caption" variant="tonal" closable>{{ error
-          }}</v-alert>
-        <v-alert v-if="successMessage" type="success" density="compact" class="mb-2 text-caption" variant="tonal"
-          closable>{{ successMessage }}</v-alert>
-        <v-form ref="form" v-model="isFormValid" @submit.prevent="saveConfig">
-          <!-- 基本设置卡片 -->
-          <v-card flat class="rounded mb-3 border config-card">
-            <v-card-title class="text-caption d-flex align-center px-3 py-2 bg-primary-lighten-5">
-              <v-icon icon="mdi-tune" class="mr-2" color="primary" size="small" />
-              <span>工作方式</span>
-            </v-card-title>
-            <v-card-text class="px-3 py-2">
-              <v-row>
-                <!-- 事件监听 -->
-                <v-col cols="12" md="2">
-                  <div class="setting-item d-flex align-center justify-space-between">
-                    <div class="d-flex align-center">
-                      <v-icon icon="mdi-power" size="small" :color="config.event_enabled ? 'success' : 'grey'"
-                        class="mr-3" />
-                      <span class="text-subtitle-2">事件监听</span>
-                    </div>
-                    <v-switch v-model="config.event_enabled" color="primary" inset :disabled="saving" density="compact"
-                      hide-details class="small-switch" />
-                  </div>
-                </v-col>
-                <!-- 定时任务组件 -->
-                <v-col cols="12" md="10">
-                  <div class="related-components">
-                    <v-row>
-                      <!-- 定时任务 -->
-                      <v-col cols="12" md="3">
-                        <div class="setting-item d-flex align-center justify-space-between">
-                          <div class="d-flex align-center">
-                            <v-icon icon="mdi-clock" size="small" :color="config.cron_enabled ? 'info' : 'grey'"
-                              class="mr-3" />
-                            <span class="text-subtitle-2">定时任务</span>
-                          </div>
-                          <v-switch v-model="config.cron_enabled" color="info" inset :disabled="saving"
-                            density="compact" hide-details class="small-switch" />
-                        </div>
-                      </v-col>
-                      <!-- 下载器选择 -->
-                      <v-col cols="12" md="4">
-                        <div class="setting-item d-flex align-center justify-space-between">
-                          <div class="d-flex align-center">
-                            <span class="text-subtitle-2">下载器</span>
-                          </div>
-                          <v-select v-model="config.downloader" :items="downloaderOptions"
-                            :disabled="!config.cron_enabled" variant="outlined" multiple chips clearable
-                            item-title="title" item-value="value" density="compact" class="text-caption"
-                            style="max-width: 140px">
-                          </v-select>
-                        </div>
-                      </v-col>
-                      <!-- 执行周期 -->
-                      <v-col cols="12" md="5">
-                        <div class="setting-item d-flex align-center justify-space-between">
-                          <div class="d-flex align-center">
-                            <span class="text-subtitle-2">执行周期</span>
-                          </div>
-                          <VCronField v-model="config.cron" density="compact" class="cron-field flex-grow-1 ml-2"
-                            :disabled="!config.cron_enabled" />
-                        </div>
-                      </v-col>
-                    </v-row>
-                  </div>
-                </v-col>
-              </v-row>
-            </v-card-text>
-          </v-card>
-
-          <v-card flat class="rounded mb-3 border config-card">
-            <v-card-title class="text-caption d-flex align-center px-3 py-2 bg-primary-lighten-5">
-              <v-icon icon="mdi-clock-time-five" class="mr-2" color="primary" size="small" />
-              <span>格式设置</span>
-            </v-card-title>
-            <v-card-text class="px-3 py-2">
-              <!-- 统一 tabs 样式 -->
-              <v-tabs v-model="_tabs" class="mb-3" density="compact" fixed-tabs>
-                <v-tab value="basic_tab">基本设置</v-tab>
-                <v-tab value="critical_tab">实验性功能</v-tab>
-              </v-tabs>
-              <v-window v-model="_tabs">
-                <v-window-item value="basic_tab">
-                  <v-row>
-                    <v-col cols="12" md="7">
-                      <div class="setting-item mb-2">
-                        <v-text-field v-model="config.format_save_path" label="保存路径格式"
-                          hint="使用Jinja2语法, 不会覆盖原保存路径, 仅追加. 留空不修改" clearable persistent-hint density="compact"
-                          variant="outlined" />
-                      </div>
-                    </v-col>
-                    <v-col cols="12" md="5">
-                      <div class="setting-item mb-2">
-                        <v-text-field v-model="config.exclude_tags" label="排除标签" placeholder="空白字符会排除所有未设置标签的种子"
-                          hint="多个标签用, 分割" clearable persistent-hint density="compact" variant="outlined" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-row>
-                    <v-col cols="12">
-                      <!-- 统一文本输入框样式 -->
-                      <div class="setting-item mb-2">
-                        <v-textarea v-model="config.exclude_dirs" rows="3" auto-grow label="排除目录"
-                          hint="排除目录, 一行一个, 路径深度不能超过保存路径" :placeholder="`例如:\n/mnt/download\nE:/download`" clearable
-                          persistent-hint density="compact" variant="outlined" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-row>
-                    <v-col cols="12" md="8">
-                      <div class="setting-item d-flex align-center py-2">
-                        <v-switch v-model="config.rename_torrent" label="种子重命名" color="primary" inset :disabled="saving"
-                          density="compact" hide-details class="small-switch" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-row>
-                    <v-col cols="12">
-                      <div class="setting-item mb-2">
-                        <v-textarea v-model="config.format_torrent_name" rows="2" auto-grow label="种子标题重命名格式"
-                          hint="使用Jinja2语法, 所用变量与主程序相同" clearable persistent-hint density="compact"
-                          variant="outlined" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-alert type="info" variant="tonal" icon="mdi-information">
-                    谨慎开启定时任务: 修改保存目录或种子文件都属于源目录操作, 已整理入库的文件会与整理记录失去关联!
-                  </v-alert>
-                  <v-alert type="info" variant="tonal" icon="mdi-information">
-                    种子重命名: 重命名种子在下载器显示的名称,qBittorrent 不会影响保存路径和种子内容布局; Transmission 不支持
-                  </v-alert>
-                </v-window-item>
-                <v-window-item value="critical_tab">
-                  <v-row>
-                    <v-col cols="12" md="8">
-                      <div class="setting-item d-flex align-center py-2">
-                        <v-switch v-model="config.rename_file" label="种子文件重命名(实验功能)" color="primary" inset
-                          :disabled="saving" density="compact" hide-details class="small-switch" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-row>
-                    <v-col cols="12">
-                      <div class="setting-item mb-2">
-                        <v-textarea v-model="config.format_movie_path" rows="3" auto-grow label="电影文件重命名格式"
-                          hint="使用Jinja2语法, 所用变量与主程序相同" clearable persistent-hint density="compact"
-                          variant="outlined" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-row>
-                    <v-col cols="12">
-                      <div class="setting-item mb-2">
-                        <v-textarea v-model="config.format_tv_path" rows="3" auto-grow label="电视剧文件重命名格式"
-                          hint="使用Jinja2语法, 所用变量与主程序相同" clearable persistent-hint density="compact"
-                          variant="outlined" />
-                      </div>
-                    </v-col>
-                  </v-row>
-                  <v-alert type="info" variant="tonal" icon="mdi-information">
-                    谨慎开启 种子文件重命名, 会导致无法辅种和其他意料之外的问题, 增加种子维护难度
-                  </v-alert>
-                </v-window-item>
-              </v-window>
-            </v-card-text>
-          </v-card>
-        </v-form>
-      </v-card-text>
-
-      <v-card-actions class="px-2 py-1">
-        <v-btn color="info" @click="emit('switch')" prepend-icon="mdi-view-dashboard" variant="text"
-          size="small">数据页</v-btn>
-        <v-spacer></v-spacer>
-        <v-btn color="secondary" variant="text" @click="resetForm" prepend-icon="mdi-restore" size="small">恢复默认</v-btn>
-        <v-btn color="primary" :disabled="!isFormValid || saving" @click="saveConfig" :loading="saving"
-          prepend-icon="mdi-content-save" variant="text" size="small">保存配置</v-btn>
-        <v-btn color="grey" @click="emit('close')" prepend-icon="mdi-close" variant="text" size="small">关闭</v-btn>
-      </v-card-actions>
-    </v-card>
-  </div>
+  <FormatterShell
+    title="种子格式化"
+    subtitle="全局配置"
+    badge="AUTO RULES"
+    :section="section"
+    :sections="sections"
+    @update:section="section = $event"
+    @switch="emit('switch')"
+    @close="emit('close')"
+    @refresh="loadClients"
+  >
+    <template #header-actions
+      ><v-btn
+        class="tf-header-save"
+        color="primary"
+        variant="flat"
+        size="small"
+        :disabled="!changed.length"
+        @click="save"
+        >保存配置</v-btn
+      ></template
+    >
+    <v-alert v-if="error" variant="tonal" type="error" density="compact" class="tf-inline-alert"
+      >{{ error }}<v-btn size="small" variant="text" @click="loadClients">重试</v-btn></v-alert
+    >
+    <v-alert v-if="submitted" variant="tonal" type="info" density="compact" class="tf-inline-alert"
+      >已请求宿主保存配置，实际保存结果以宿主通知为准。</v-alert
+    >
+    <v-form ref="form" @submit.prevent="save">
+      <template v-if="section === 'automation'">
+        <div class="tf-heading">
+          <div>
+            <span class="tf-eyebrow">01 / AUTOMATION</span>
+            <h2>选择插件的工作方式</h2>
+            <p>手动工作台始终可用，以下开关只控制自动处理。</p>
+          </div>
+        </div>
+        <div class="tf-card">
+          <div class="tf-card-header">
+            <h3>事件监听</h3>
+          </div>
+          <div class="tf-card-body">
+            <div class="tf-rule-row">
+              <div class="tf-rule-copy">
+                <strong>添加下载时自动处理</strong>
+                <p>使用下载事件已有的媒体信息，仍遵守排除规则并保留原始备份。</p>
+              </div>
+              <v-switch
+                v-model="config.event_enabled"
+                inset
+                color="primary"
+                density="compact"
+                hide-details
+                aria-label="启用下载事件自动处理"
+              />
+            </div>
+          </div>
+        </div>
+        <div class="tf-card">
+          <div class="tf-card-header">
+            <h3>定时扫描</h3>
+            <v-switch
+              v-model="config.cron_enabled"
+              inset
+              color="primary"
+              density="compact"
+              hide-details
+              aria-label="启用定时扫描"
+            />
+          </div>
+          <div class="tf-card-body">
+            <v-select
+              v-model="config.downloader"
+              :items="clients.map(item => ({ title: item.name, value: item.name }))"
+              :disabled="!config.cron_enabled || loading"
+              :loading="loading"
+              label="扫描下载器"
+              hint="这里只限制定时扫描；手动工作台可选择所有已启用的支持下载器。"
+              persistent-hint
+              multiple
+              chips
+              clearable
+              variant="outlined"
+              density="compact"
+            />
+            <v-cron-field
+              v-model="config.cron"
+              :disabled="!config.cron_enabled"
+              label="执行周期（Cron）"
+              placeholder="0 8 * * *"
+              hint="Cron 表达式，留空默认每天 08:00。"
+              persistent-hint
+              clearable
+              variant="outlined"
+              density="compact"
+              class="mt-3"
+            />
+          </div>
+        </div>
+        <div class="tf-card">
+          <div class="tf-card-body">
+            <h3>想只处理一个种子？</h3>
+            <p>不用启用自动任务，打开工作台即可选择、指定媒体、临时覆盖模板并预览差异。</p>
+            <v-btn color="primary" variant="tonal" size="small" @click="emit('switch')">打开单种子工作台</v-btn>
+          </div>
+        </div>
+      </template>
+      <template v-else-if="section === 'exclusions'">
+        <div class="tf-heading">
+          <div>
+            <span class="tf-eyebrow">02 / SAFETY</span>
+            <h2>排除与保护规则</h2>
+            <p>手动与自动流程共用这些保护，不会在单次处理时隐式绕过。</p>
+          </div>
+        </div>
+        <div class="tf-card">
+          <div class="tf-card-header">
+            <h3>排除范围</h3>
+          </div>
+          <div class="tf-card-body">
+            <v-textarea
+              v-model="config.exclude_dirs"
+              label="排除保存目录"
+              rows="4"
+              auto-grow
+              clearable
+              variant="outlined"
+              density="compact"
+              hint="每行一个，按目录边界匹配该目录及子目录，不按名称子串误匹配。"
+              persistent-hint
+              :placeholder="'/mnt/download/protected\nD:/downloads/protected'"
+            />
+            <v-text-field
+              v-model="config.exclude_tags"
+              label="排除标签"
+              variant="outlined"
+              density="compact"
+              clearable
+              class="mt-4"
+              hint="多个标签用逗号分隔；空白标签条目匹配没有标签的种子。"
+              persistent-hint
+            />
+          </div>
+        </div>
+        <div class="tf-card">
+          <div class="tf-card-body">
+            <h3>系统屏蔽与原始目录风险</h3>
+            <p>
+              文件改名遵守 MoviePilot
+              的整理屏蔽词，命中文件会保留原路径并在预览中注明。非法目标、重名、越界路径不会执行。
+            </p>
+            <v-alert variant="tonal" type="warning" density="compact"
+              >修改保存目录或文件布局属于源目录操作，已整理文件可能与整理记录失去关联；实验性文件改名可能影响辅种。操作前请核对预览。</v-alert
+            >
+          </div>
+        </div>
+      </template>
+      <template v-else>
+        <div class="tf-heading">
+          <div>
+            <span class="tf-eyebrow">03 / NAMING RULES</span>
+            <h2>全局命名规则</h2>
+            <p>这些规则用于自动任务，也是单次处理的默认起点。变量与 MoviePilot 整理命名保持一致。</p>
+          </div>
+        </div>
+        <RuleEditor v-model="naming" :temporary="false" />
+      </template>
+    </v-form>
+    <template #summary>
+      <div class="tf-summary">
+        <div class="tf-summary-heading">
+          <h2>配置影响摘要</h2>
+          <span class="tf-source-badge">全局</span>
+        </div>
+        <div class="tf-stat-row">
+          <span>事件自动处理</span><strong>{{ config.event_enabled ? '启用' : '关闭' }}</strong>
+        </div>
+        <div class="tf-stat-row">
+          <span>定时扫描</span><strong>{{ config.cron_enabled ? '启用' : '关闭' }}</strong>
+        </div>
+        <div v-if="config.cron_enabled" class="tf-summary-block">
+          <span class="tf-summary-label">下载器 / 周期</span
+          ><span class="tf-summary-name">{{ config.downloader.join('、') || '尚未选择' }}</span
+          ><code class="tf-code-path mt-2">{{ config.cron || '0 8 * * *' }}</code>
+        </div>
+        <div class="tf-summary-block">
+          <div class="tf-stat-row">
+            <span>显示名重命名</span><strong>{{ config.rename_torrent ? '启用' : '关闭' }}</strong>
+          </div>
+          <div class="tf-stat-row">
+            <span>实验性文件改名</span><strong>{{ config.rename_file ? '启用' : '关闭' }}</strong>
+          </div>
+          <p class="tf-summary-note">
+            只对本插件的源下载目录进行处理。Transmission 不支持独立显示名及任意跨目录文件布局。
+          </p>
+        </div>
+        <div class="tf-summary-block">
+          <span class="tf-summary-label">未保存的改动</span
+          ><strong class="tf-summary-name">{{ changed.length }} 项</strong>
+          <p class="tf-summary-note">单种子临时规则不会改变这里的配置；已处理种子必须先恢复后再应用新规则。</p>
+        </div>
+        <div class="tf-summary-action">
+          <v-btn color="primary" variant="flat" block :disabled="!changed.length" @click="save">保存全局配置</v-btn
+          ><v-btn variant="text" block class="mt-2" @click="reset">恢复默认值</v-btn>
+        </div>
+        <p class="tf-summary-note">配置提交由宿主负责保存。插件重置会清除处理备份。</p>
+      </div>
+    </template>
+    <template #actions
+      ><span>{{ changed.length ? `${changed.length} 项尚未保存` : '没有未保存改动' }}</span
+      ><v-btn color="primary" variant="flat" :disabled="!changed.length" @click="save">保存配置</v-btn></template
+    >
+  </FormatterShell>
 </template>
-
-<style scoped>
-/* 插件配置容器样式 */
-.plugin-config {
-  max-width: 80rem;
-  margin: 0 auto;
-  padding: 0.5rem;
-}
-
-/* 虚线框样式，用于包裹相关组件 */
-.related-components {
-  border: 1px dashed rgba(var(--v-theme-primary), 0.5);
-  border-radius: 8px;
-  margin: 1rem 5px;
-  display: flex;
-  flex-wrap: wrap;
-}
-
-/* 主色浅化 5 级的背景颜色样式 */
-.bg-primary-lighten-5 {
-  background-color: rgba(var(--v-theme-primary), 0.07);
-}
-
-/* 通用边框样式 */
-.border {
-  border: thin solid rgba(var(--v-border-color), var(--v-border-opacity));
-}
-
-/* 配置卡片样式 */
-.config-card {
-  /* 背景渐变，包含主背景和重复渐变效果 */
-  background-image: linear-gradient(to right, rgba(var(--v-theme-surface), 0.98), rgba(var(--v-theme-surface), 0.95)),
-    repeating-linear-gradient(45deg, rgba(var(--v-theme-primary), 0.03), rgba(var(--v-theme-primary), 0.03) 10px, transparent 10px, transparent 20px);
-  background-attachment: fixed;
-  box-shadow: 0 1px 2px rgba(var(--v-border-color), 0.05) !important;
-  transition: all 0.3s ease;
-}
-
-/* 配置卡片悬停样式 */
-.config-card:hover {
-  box-shadow: 0 3px 6px rgba(var(--v-border-color), 0.1) !important;
-}
-
-/* 设置项样式 */
-.setting-item {
-  border-radius: 8px;
-  transition: all 0.2s ease;
-  padding: 0.5rem;
-  height: 100%;
-  display: flex;
-  align-items: center;
-}
-
-/* 设置项悬停样式 */
-.setting-item:hover {
-  background-color: rgba(var(--v-theme-primary), 0.03);
-}
-
-/* 设置项内选择器样式 */
-.setting-item .v-select {
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-/* 确保所有列的高度一致 */
-.v-col {
-  display: flex;
-  align-items: stretch;
-}
-
-/* 小开关组件样式，调整大小和位置 */
-.small-switch {
-  transform: scale(0.8);
-  margin-right: -8px;
-  flex-shrink: 0;
-}
-
-/* 副标题 2 文本样式 */
-.text-subtitle-2 {
-  font-size: 0.875rem !important;
-  font-weight: 500;
-  white-space: nowrap;
-  margin-right: 0.5rem;
-}
-
-/* 深度选择器，调整选择器输入区域样式 */
-:deep(.v-select .v-field__input) {
-  min-height: 32px;
-  padding-top: 0;
-  padding-bottom: 0;
-}
-</style>

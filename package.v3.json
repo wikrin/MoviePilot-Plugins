@@ -42,14 +42,15 @@
   },
   "TorrentFormatter": {
     "name": "种子格式化",
-    "description": "根据自定义格式修改MP下载种子的保存路径、种子名称、种子文件名(实验功能)",
+    "description": "支持单种子媒体指定、临时规则及目录差异预览，按自定义格式处理种子并保留恢复备份",
     "labels": "文件管理, 下载管理, 重命名",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "system_version": ">=3.0.0",
     "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/alter_1.png",
     "author": "Attente",
     "level": 1,
     "history": {
+      "2.1.0": "新增单种子工作台、手动媒体指定与临时规则；支持目录树/差异预览、执行前备份和完整恢复",
       "3.0.0": "迁移至 V3 SDK 与模块布局"
     }
   }
