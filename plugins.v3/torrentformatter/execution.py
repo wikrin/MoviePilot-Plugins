@@ -13,6 +13,8 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Callable
 from uuid import uuid4
 
+from app.sdk.logging import logger
+
 from .downloaders import Downloader
 from .models import (
     Change,
@@ -249,7 +251,7 @@ def reconcile_execution(
     logs = [OperationLog.model_validate(item) for item in record.get("operations", ())]
     if actual:
         logs = [
-            log.model_copy(update={"status": "confirmed", "message": "回读确认已生效"})
+            log.model_copy(update={"status": "confirmed", "message": "修改已生效"})
             if log.status in {"unknown", "failed"}
             and change_confirmed(log.change, actual)
             else log
@@ -271,7 +273,7 @@ def reconcile_execution(
     ):
         status, message = (
             "success",
-            "恢复完成" if record["mode"] == "recover" else "处理完成，已回读确认",
+            "恢复完成" if record["mode"] == "recover" else "处理完成",
         )
     elif actual and (actual.moving or any(log.status == "unknown" for log in logs)):
         status, message = (
@@ -358,13 +360,29 @@ def execute_plan(
         "database_error": "",
         "running": True,
     }
+    logger.info(
+        f"{preview.downloader}:{preview.torrent_hash} 开始"
+        f"{'恢复' if preview.mode == 'recover' else '格式化'}："
+        f"计划变更 {len(operations)} 项，备份数据库记录 {sum(len(values) for values in plan.db_before.values())} 项"
+    )
     # 持久化失败必须直接向上抛出，绝不调用下载器。
     persist(record)
+    logger.info(
+        f"{preview.downloader}:{preview.torrent_hash} 原始状态及数据库记录备份完成，开始逐项执行"
+    )
     actual: TorrentInfo | None = preview.before
     for index, change in enumerate(operations):
         call_error = ""
+        logger.info(
+            f"{preview.downloader}:{preview.torrent_hash} 执行 {index + 1}/{len(operations)} "
+            f"{change.kind}：{change.before} ==> {change.after}"
+        )
         try:
             if change.kind == "auto_tmm":
+                logger.info(
+                    f"{preview.downloader}:{preview.torrent_hash} "
+                    f"{'关闭' if change.after != 'true' else '开启'} Torrent 自动管理"
+                )
                 adapter.set_auto_tmm(preview.torrent_hash, change.after == "true")
             elif change.kind == "file":
                 adapter.rename_file(preview.torrent_hash, change.before, change.after)
@@ -376,6 +394,9 @@ def execute_plan(
                 adapter.set_torrent_save_path(preview.torrent_hash, change.after)
         except Exception as error:
             call_error = str(error)
+            logger.error(
+                f"{preview.downloader}:{preview.torrent_hash} {change.kind} 调用失败：{call_error}"
+            )
         confirmed, read_error = False, ""
         for attempt in range(read_attempts):
             try:
@@ -388,18 +409,32 @@ def execute_plan(
                 actual = None
             if attempt + 1 < read_attempts:
                 time.sleep(read_delay)
+        operation_message = (
+            "修改已生效"
+            if confirmed
+            else (call_error or read_error or "下载器尚未回报目标状态")
+        )
         record["operations"][index].update(
             status="confirmed" if confirmed else "unknown",
-            message="回读确认已生效"
-            if confirmed
-            else (call_error or read_error or "下载器尚未回报目标状态"),
+            message=operation_message,
         )
+        if confirmed:
+            logger.info(
+                f"{preview.downloader}:{preview.torrent_hash} {change.kind} 修改已生效"
+            )
+        else:
+            logger.warn(
+                f"{preview.downloader}:{preview.torrent_hash} {change.kind} 未确认：{operation_message}"
+            )
         if actual:
             record["actual"] = snapshot_dict(actual)
             try:
                 sync_database(record, actual)
             except Exception as error:
                 record["database_error"] = str(error)
+                logger.error(
+                    f"{preview.downloader}:{preview.torrent_hash} 下载记录同步失败：{error}"
+                )
         result = reconcile_execution(record, actual)
         record.update(status=result.status, message=result.message)
         persist(record)
@@ -414,6 +449,9 @@ def execute_plan(
                 record["database_error"] = str(error)
     record["running"] = False
     result = reconcile_execution(record, actual)
+    logger.info(
+        f"{preview.downloader}:{preview.torrent_hash} 执行结束：{result.status}，{result.message}"
+    )
     record.update(
         status=result.status,
         message=result.message,

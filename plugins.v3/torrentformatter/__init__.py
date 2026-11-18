@@ -765,6 +765,9 @@ class TorrentFormatter(_PluginBase):
         ):
             raise HTTPException(409, "下载记录尚未确认恢复，保留备份")
         key = record["history_id"]
+        logger.info(
+            f"{record['downloader']}:{record['torrent_hash']} 恢复状态及下载记录已确认，开始清理备份"
+        )
         metadata = (self.get_data(key="history_v2") or {}).get(key)
         if metadata and metadata["operation_id"] != record.get("source_operation_id"):
             return
@@ -776,6 +779,7 @@ class TorrentFormatter(_PluginBase):
         name, torrent_hash = key.rsplit(":", 1)
         self._clear_history(key, unquote(name), torrent_hash)
         self._set_pending(record["downloader"], record["torrent_hash"], None)
+        logger.info(f"{key} 恢复完成，插件备份及待处理状态已清理")
 
     def get_history(
         self,
@@ -1428,7 +1432,12 @@ class TorrentFormatter(_PluginBase):
                 "targets": targets,
             }
 
-        return self.plugindata._execute_sync_write(stage)
+        result = self.plugindata._execute_sync_write(stage)
+        logger.info(
+            f"批量历史清理事务提交完成：删除 {len(result['deleted'])} 条，"
+            f"使 {len(result['invalidated'])} 条关联身份失效"
+        )
+        return result
 
     def _delete_history_items_locked(
         self, items: list[DeleteHistoryBatchItem]
@@ -1499,6 +1508,9 @@ class TorrentFormatter(_PluginBase):
         failures = [
             result for result in ordered if result.status not in ("deleted", "not_found")
         ]
+        logger.info(
+            f"历史清理完成：确认删除 {len(removed)} 条，保留 {len(failures)} 条"
+        )
         status = "success" if not failures else "partial" if removed else "failed"
         message = (
             f"已移除 {len(removed)} 条插件历史，{len(failures)} 条保留并返回原因"
@@ -1624,7 +1636,7 @@ class TorrentFormatter(_PluginBase):
             name = self._downloader_name(data.get("downloader"))
             torrent_hash = str(data.get("hash") or "").lower()
             if not name or not torrent_hash:
-                logger.warning("下载添加事件缺少下载器或 Hash，跳过格式化")
+                logger.warn("下载添加事件缺少下载器或 Hash，跳过格式化")
                 return
             key = identity_key(name, torrent_hash)
             with self._lock:
@@ -1648,7 +1660,7 @@ class TorrentFormatter(_PluginBase):
             if task is not None:
                 self._record_event_failure(task, error)
             else:
-                logger.warning(f"下载添加事件格式化失败：{error}")
+                logger.warn(f"下载添加事件格式化失败：{error}")
         finally:
             if task is not None:
                 with self._lock:
@@ -1722,26 +1734,51 @@ class TorrentFormatter(_PluginBase):
                 if isinstance(error, _TorrentNotReady)
                 else "格式化失败"
             )
-            logger.warning(f"{task.downloader}:{task.torrent_hash} {label}：{reason}")
+            logger.warn(f"{task.downloader}:{task.torrent_hash} {label}：{reason}")
             try:
                 if not self._has_history(task.downloader, task.torrent_hash):
                     self._set_pending(task.downloader, task.torrent_hash, reason)
             except Exception as storage_error:  # noqa: BLE001 -- 保存终态失败不能覆盖原异常或触发操作重试
-                logger.warning(f"事件失败原因保存失败：{storage_error}")
+                logger.warn(f"事件失败原因保存失败：{storage_error}")
 
     def cron_process_main(self):
         """
         按配置扫描摘要，只为未处理种子读取文件；已修改的失败先恢复。
         """
+        logger.info(f"开始定时扫描种子，下载器数量：{len(self.config.downloader)}")
         for name in self.config.downloader:
+            processed = skipped = failed = 0
             try:
                 adapter = resolve_downloader(name)
-                for summary in adapter.list_torrents():
-                    if not self._has_history(name, summary.hash):
-                        self._auto_process(name, adapter, summary.hash)
+                summaries = adapter.list_torrents()
+                candidates = [
+                    summary
+                    for summary in summaries
+                    if not self._has_history(name, summary.hash)
+                ]
+                logger.info(
+                    f"下载器 {name} 扫描完成：种子 {len(summaries)} 个，待处理 {len(candidates)} 个"
+                )
+                for summary in candidates:
+                    try:
+                        result = self._auto_process(name, adapter, summary.hash)
+                        if result.status in {"success", "no_changes"}:
+                            processed += 1
+                        elif result.status == "blocked":
+                            skipped += 1
+                        else:
+                            failed += 1
+                    except Exception as error:
+                        failed += 1
+                        logger.warn(
+                            f"下载器 {name} 种子 {summary.hash} 自动处理失败：{error}"
+                        )
+                logger.info(
+                    f"下载器 {name} 定时处理结果：成功 {processed} 个，跳过 {skipped} 个，失败 {failed} 个"
+                )
             except Exception as error:
-                logger.warning(f"下载器 {name} 自动扫描失败：{error}")
-
+                logger.warn(f"下载器 {name} 自动扫描失败：{error}")
+        logger.info("定时扫描种子结束")
     @staticmethod
     def _downloader_name(
         downloader: str | None, downloadhis: DownloadHistory | None = None
@@ -1781,7 +1818,7 @@ class TorrentFormatter(_PluginBase):
         """
         name = self._downloader_name(downloader, downloadhis)
         if not name:
-            logger.warning("未指定可用下载器，跳过格式化")
+            logger.warn("未指定可用下载器，跳过格式化")
             return False
         try:
             adapter = resolve_downloader(name)
@@ -1796,7 +1833,7 @@ class TorrentFormatter(_PluginBase):
             )
             return result.status in {"success", "no_changes"}
         except Exception as error:
-            logger.warning(f"种子格式化失败：{error}")
+            logger.warn(f"种子格式化失败：{error}")
             return False
 
     def _auto_process(
@@ -1852,7 +1889,6 @@ class TorrentFormatter(_PluginBase):
                             409, "操作已开始或预览已失效，不自动重试；请查询操作结果"
                         ) from error
                     raise
-                logger.info(f"{name}:{torrent.hash}：{result.message}")
                 return result
             logger.info(f"{name}:{torrent.hash}：{preview.message}")
             self._set_pending(
@@ -1901,17 +1937,29 @@ class TorrentFormatter(_PluginBase):
                 torrent_hash = torrent_hash.lower()
                 name = downloader or self.get_processed_data().get(torrent_hash)
                 if not name:
-                    logger.warning(f"种子 {torrent_hash} 删除来源不明确，保留备份")
+                    logger.warn(f"种子 {torrent_hash} 删除来源不明确，保留备份")
                     continue
                 self._clear_history(
                     identity_key(name, torrent_hash), name, torrent_hash
                 )
                 models = self._database_models(name, torrent_hash)
+                deleted_files = 0
                 for row in models["files"].values():
                     if row.state == 0:
                         self.downloadhis.delete_downloadfile(row.id)
+                        deleted_files += 1
+                deleted_history = 0
                 for row in models["history"].values():
                     self.downloadhis.delete_history(row.id)
+                    deleted_history += 1
+                if deleted_files:
+                    logger.warn(
+                        f"{name}:{torrent_hash} 已删除下载文件历史 {deleted_files} 条"
+                    )
+                if deleted_history:
+                    logger.warn(
+                        f"{name}:{torrent_hash} 已删除下载历史 {deleted_history} 条"
+                    )
                 self._set_pending(name, torrent_hash, None)
 
     def _legacy_records(
@@ -2034,6 +2082,7 @@ class TorrentFormatter(_PluginBase):
         :param downloader: 原下载器
         :param torrent_hash: 原 Hash
         """
+        logger.debug(f"{key} 开始清理插件历史及关联操作日志")
         index = deepcopy(self.get_data(key="history_v2") or {})
         metadata = index.pop(key, None)
         if metadata:
@@ -2180,6 +2229,14 @@ class TorrentFormatter(_PluginBase):
                 if changes:
                     patches.append((group, key, changes, deepcopy(expected)))
         if patches:
+            groups = {
+                "history": sum(1 for group, *_ in patches if group == "history"),
+                "files": sum(1 for group, *_ in patches if group == "files"),
+            }
+            logger.info(
+                f"{record['downloader']}:{record['torrent_hash']} 同步下载记录："
+                f"历史 {groups['history']} 条，文件 {groups['files']} 条"
+            )
             self._write_database_cas(
                 record["downloader"], record["torrent_hash"], patches
             )
@@ -2222,11 +2279,17 @@ class TorrentFormatter(_PluginBase):
                     .execution_options(synchronize_session=False)
                 )
                 if result.rowcount != 1:
+                    logger.error(
+                        f"下载记录 {group}:{key} CAS 更新失败，记录已删除、改动或不属于当前下载器"
+                    )
                     raise ValueError(
                         f"下载记录 {group}:{key} 已删除、改动或不属于当前下载器，停止写入"
                     )
 
         self.downloadhis._execute_sync_write(stage)
+        logger.debug(
+            f"{downloader}:{torrent_hash} 下载记录事务写入完成：{len(patches)} 条"
+        )
 
     def _persist_execution(self, record: dict):
         """
@@ -2345,7 +2408,7 @@ class TorrentFormatter(_PluginBase):
         :param readiness: 仅在确认没有持久冲突后提供的暂态就绪结论
         :raises HTTPException: 尚未领取 token 的执行前冲突
         """
-        logger.warning(
+        logger.warn(
             f"{preview.downloader}:{preview.torrent_hash} 执行前拒绝：{message}；"
             f"状态={preview.before.state or '-'} -> {actual.state or '-'}；"
             f"变化字段={','.join(fields) or '-'}；"
@@ -2681,6 +2744,11 @@ class TorrentFormatter(_PluginBase):
                 )
             except Exception as error:
                 reason = str(error)
+                logger.warn(
+                    f"{request.downloader}:{torrent.hash} 媒体识别失败：{reason}"
+                )
+        if reason:
+            logger.info(f"{request.downloader}:{torrent.hash} 规划跳过：{reason}")
 
         def render_torrent(template: str) -> str:
             """
