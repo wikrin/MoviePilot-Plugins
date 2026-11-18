@@ -5,9 +5,9 @@
 import hashlib
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Callable
+from typing import Callable, Literal
 
 from .models import (
     Change,
@@ -18,7 +18,6 @@ from .models import (
     PreviewResponse,
     TorrentFile,
     TorrentInfo,
-    snapshot_dict,
 )
 
 
@@ -26,6 +25,35 @@ class SkipFile(ValueError):
     """
     文件元数据不足，保留原文件而非猜测名称。
     """
+
+
+@dataclass(frozen=True)
+class TorrentReadiness:
+    """
+    详情快照的就绪结论，不把普通下载状态当作冲突。
+
+    :param code: 就绪、移动/校验、元数据未完成或文件明细缺失
+    :param message: 未就绪的中文说明；就绪时为空
+    """
+
+    code: Literal["ready", "moving", "metadata", "files"]
+    message: str = ""
+
+
+def torrent_readiness(torrent: TorrentInfo) -> TorrentReadiness:
+    """
+    检查详情是否能安全规划，合法零字节文件仍须有文件明细。
+
+    :param torrent: 包含文件查询结果的详情快照，不用于摘要列表
+    :return: 明确的就绪原因码与说明
+    """
+    if torrent.moving:
+        return TorrentReadiness("moving", "种子正在移动或校验，请等待完成")
+    if not torrent.metadata_complete:
+        return TorrentReadiness("metadata", "磁力种子元信息尚未就绪")
+    if not torrent.files:
+        return TorrentReadiness("files", "文件明细尚未就绪，不能安全规划")
+    return TorrentReadiness("ready")
 
 
 def is_windows_path(value: str) -> bool:
@@ -142,18 +170,64 @@ def append_save_path(original: str, relative: str) -> str:
     return root.joinpath(*parts[overlap:]).as_posix()
 
 
+def _snapshot_values(snapshot: TorrentInfo) -> dict[str, object]:
+    """
+    投影执行所依赖的身份、布局与文件选择，不包含标签或优先级高低。
+
+    :param snapshot: 实时种子详情
+    :return: 按稳定文件索引排列的可序列化校验字段
+    """
+    windows = is_windows_path(snapshot.save_path)
+    files = sorted(
+        snapshot.files,
+        key=lambda file: (
+            file.index is None,
+            file.index if file.index is not None else -1,
+            path_key(file.name, windows),
+            file.size,
+            file.selected,
+        ),
+    )
+    return {
+        "hash": snapshot.hash.lower(),
+        "name": snapshot.name,
+        "save_path": path_key(snapshot.save_path, windows),
+        "total_size": snapshot.total_size,
+        "auto_tmm": snapshot.auto_tmm,
+        "files": [
+            {
+                "index": file.index,
+                "name": path_key(file.name, windows),
+                "size": file.size,
+                "selected": file.selected,
+            }
+            for file in files
+        ],
+    }
+
+
 def snapshot_fingerprint(snapshot: TorrentInfo) -> str:
     """
-    固定目标身份/布局，不因下载进度或普通队列状态变更而失效。
+    固定身份/布局/选择，不因普通状态、分类、标签或优先级高低而失效。
 
     :param snapshot: 实时种子快照
-    :return: SHA256 状态摘要
+    :return: SHA256 稳定字段摘要，就绪与排除须另行核验
     """
-    values = snapshot_dict(snapshot)
-    values.pop("state", None)
-    values.pop("moving", None)
-    values["tags"] = sorted(values["tags"])
-    return fingerprint(values)
+    return fingerprint(_snapshot_values(snapshot))
+
+
+def snapshot_changed_fields(
+    before: TorrentInfo, actual: TorrentInfo
+) -> tuple[str, ...]:
+    """
+    复用摘要投影定位变化字段，不向日志输出整份文件列表。
+
+    :param before: 计划冻结时的详情
+    :param actual: 执行前实时详情
+    :return: 实质变化的字段名，文件变化统一汇总为 files
+    """
+    old, live = _snapshot_values(before), _snapshot_values(actual)
+    return tuple(key for key in old if old[key] != live[key])
 
 
 def fingerprint(value: object) -> str:
@@ -253,14 +327,7 @@ def build_format_preview(
         torrent.name,
         torrent.auto_tmm,
     )
-    blocked_reason = blocked_reason or (
-        "种子正在移动或校验，请等待完成" if torrent.moving else ""
-    )
-    blocked_reason = blocked_reason or (
-        "磁力种子元信息尚未就绪" if not torrent.metadata_complete else ""
-    )
-    if torrent.total_size > 0 and not torrent.files:
-        blocked_reason = blocked_reason or "文件明细尚未就绪，不能安全规划"
+    blocked_reason = blocked_reason or torrent_readiness(torrent).message
     if rules.rename_file and (
         any(file.index is None for file in torrent.files)
         or len({file.index for file in torrent.files}) != len(torrent.files)

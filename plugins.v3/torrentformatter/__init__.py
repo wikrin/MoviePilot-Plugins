@@ -4,6 +4,7 @@
 
 import threading
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from urllib.parse import unquote
@@ -27,6 +28,7 @@ from app.sdk.logging import logger
 from app.sdk.media import MediaInfo, MetaBase, MetaInfo, MetaInfoPath
 from app.sdk.plugin.base import _PluginBase
 from app.sdk.services import DownloaderHelper
+from app.sdk.utilities import retry
 
 from .downloaders import (
     Downloader,
@@ -87,10 +89,13 @@ from .models import (
 )
 from .planner import (
     SkipFile,
+    TorrentReadiness,
     build_format_preview,
     exclusion_reason,
     fingerprint,
+    snapshot_changed_fields,
     snapshot_fingerprint,
+    torrent_readiness,
 )
 from .recovery import build_recovery_preview
 
@@ -102,6 +107,63 @@ __all__ = [
     "QbittorrentDownloader",
     "TransmissionDownloader",
 ]
+
+
+class _TorrentNotReady(HTTPException):
+    """
+    仅表达没有副作用的执行前暂态，供事件装饰器按类型重试。
+
+    :param downloader: 实际下载器名称
+    :param torrent_hash: 精确种子 Hash
+    :param readiness: 移动/校验、元数据或文件明细未就绪的原因
+    """
+
+    def __init__(self, downloader: str, torrent_hash: str, readiness: TorrentReadiness):
+        """
+        保留 HTTP 409 契约，暂态异常只允许在领取执行 token 之前产生。
+
+        :param downloader: 实际下载器名称
+        :param torrent_hash: 精确种子 Hash
+        :param readiness: 可等待恢复的就绪结论
+        """
+        self.downloader = downloader
+        self.torrent_hash = torrent_hash
+        self.readiness = readiness
+        super().__init__(status_code=409, detail=readiness.message)
+
+    def __str__(self) -> str:
+        """
+        为宿主重试日志补充复合身份，HTTP detail 仍保持独立的中文原因。
+
+        :return: 不含凭据的重试说明
+        """
+        return (
+            f"{self.downloader}:{self.torrent_hash} "
+            f"{self.detail}（{self.readiness.code}）"
+        )
+
+
+@dataclass(frozen=True)
+class _EventTask:
+    """
+    一次下载事件在短重试期间持有的身份、配置与数据库基线。
+
+    :param downloader: 实际下载器名称
+    :param torrent_hash: 规范化的精确 Hash
+    :param generation: 注册任务时的实例代次
+    :param config_fingerprint: 事件开始时的有效配置/连接摘要
+    :param db_before: 事件开始时的下载记录路径快照
+    :param meta: 事件提供的源媒体元数据
+    :param media_info: 事件提供的已识别媒体
+    """
+
+    downloader: str
+    torrent_hash: str
+    generation: int
+    config_fingerprint: str
+    db_before: dict
+    meta: MetaBase | None = None
+    media_info: MediaInfo | None = None
 
 
 class TorrentFormatter(_PluginBase):
@@ -151,6 +213,9 @@ class TorrentFormatter(_PluginBase):
             self._preview_store = PreviewStore()
         if not hasattr(self, "_history_summary_cache"):
             self._history_summary_cache = HistorySummaryCache()
+        if not hasattr(self, "_event_tasks"):
+            self._event_tasks: dict[str, _EventTask] = {}
+            self._event_generation = 0
         with self._lock:
             self.stop_service()
             self.downloadhis = DownloadHistoryOper()
@@ -164,6 +229,7 @@ class TorrentFormatter(_PluginBase):
         :param config: 全局配置，不接收本次临时规则
         """
         self.config = TorrentFormatterConfig.model_validate(config or {})
+        self._events_stopped = False
 
     @staticmethod
     def get_render_mode() -> tuple[str, str | None]:
@@ -216,12 +282,18 @@ class TorrentFormatter(_PluginBase):
 
     def stop_service(self):
         """
-        清除内存预览，持久化日志留给回查和恢复。
+        使事件旧代次与内存预览失效，持久化日志留给回查和恢复。
         """
-        if store := getattr(self, "_preview_store", None):
-            store.clear()
-        if cache := getattr(self, "_history_summary_cache", None):
-            cache.clear()
+        if lock := getattr(self, "_lock", None):
+            with lock:
+                self._event_generation = getattr(self, "_event_generation", 0) + 1
+                self._events_stopped = True
+                if tasks := getattr(self, "_event_tasks", None):
+                    tasks.clear()
+                if store := getattr(self, "_preview_store", None):
+                    store.clear()
+                if cache := getattr(self, "_history_summary_cache", None):
+                    cache.clear()
 
     def get_api(self):
         """
@@ -741,7 +813,7 @@ class TorrentFormatter(_PluginBase):
         :return: 分页历史及位置提示
         """
         context = HistoryReadContext(self.get_data)
-        items = []
+        items: list[HistoryItem] = []
         index = context.history_index()
         for key, data in index.items():
             items.append(
@@ -1539,20 +1611,123 @@ class TorrentFormatter(_PluginBase):
     @eventmanager.register(EventType.DownloadAdded)
     def event_process_main(self, event: Event):
         """
-        已有下载事件使用同一只读计划/执行器，不另做一套改名逻辑。
+        同步事件入口复用宿主短重试，重复身份合并且旧代次不能继续执行。
 
         :param event: 下载添加事件
         """
-        if not self.config.event_enabled or not event:
+        if not self.config.event_enabled or self._events_stopped or not event:
             return
         data = event.event_data or {}
         context = data.get("context")
-        self.main(
-            downloader=data.get("downloader"),
-            torrent_hash=data.get("hash"),
-            meta=context.meta_info if context else None,
-            media_info=context.media_info if context else None,
+        task = None
+        try:
+            name = self._downloader_name(data.get("downloader"))
+            torrent_hash = str(data.get("hash") or "").lower()
+            if not name or not torrent_hash:
+                logger.warning("下载添加事件缺少下载器或 Hash，跳过格式化")
+                return
+            key = identity_key(name, torrent_hash)
+            with self._lock:
+                if not self.config.event_enabled or self._events_stopped:
+                    return
+                if key in self._event_tasks:
+                    logger.info(f"{key} 已有事件任务，合并重复事件")
+                    return
+                task = _EventTask(
+                    downloader=name,
+                    torrent_hash=torrent_hash,
+                    generation=self._event_generation,
+                    config_fingerprint=self._config_fingerprint(name),
+                    db_before=self._database_snapshot(name, torrent_hash),
+                    meta=context.meta_info if context else None,
+                    media_info=context.media_info if context else None,
+                )
+                self._event_tasks[key] = task
+            self._retry_event_task(task)
+        except Exception as error:  # noqa: BLE001 -- 事件边界仅终止任务，未知异常不能扩大重试范围
+            if task is not None:
+                self._record_event_failure(task, error)
+            else:
+                logger.warning(f"下载添加事件格式化失败：{error}")
+        finally:
+            if task is not None:
+                with self._lock:
+                    key = identity_key(task.downloader, task.torrent_hash)
+                    if self._event_tasks.get(key) is task:
+                        del self._event_tasks[key]
+
+    def _event_is_current(self, task: _EventTask) -> bool:
+        """
+        在插件锁内判断任务是否仍归当前实例所有。
+
+        :param task: 事件开始时注册的任务
+        :return: 开关、代次与活跃身份均仍有效
+        """
+        return (
+            self.config.event_enabled
+            and not self._events_stopped
+            and task.generation == self._event_generation
+            and self._event_tasks.get(identity_key(task.downloader, task.torrent_hash))
+            is task
         )
+
+    @retry(_TorrentNotReady, tries=3, delay=3, backoff=2, logger=logger)
+    def _retry_event_task(
+        self, task: _EventTask
+    ) -> PreviewResponse | ExecutionResponse | None:
+        """
+        每次重读并规划；只有明确的执行前暂态能传播到锁外等待。
+
+        :param task: 不随重试更新的事件基线
+        :return: 自动处理结果，旧代次或已有历史返回 None 终止重试
+        :raises _TorrentNotReady: 元数据、文件明细或移动/校验未就绪
+        :raises HTTPException: 配置或数据库已改变，不应重试
+        """
+        with self._lock:
+            if not self._event_is_current(task):
+                return None
+            if self._has_history(task.downloader, task.torrent_hash):
+                return None
+            if self._config_fingerprint(task.downloader) != task.config_fingerprint:
+                raise HTTPException(
+                    409, "事件处理期间规则、排除项或连接已改变，不再重试"
+                )
+            if fingerprint(
+                self._database_snapshot(task.downloader, task.torrent_hash)
+            ) != fingerprint(task.db_before):
+                raise HTTPException(409, "事件处理期间下载记录已改变，不再重试")
+            adapter = resolve_downloader(task.downloader)
+            return self._auto_process(
+                task.downloader,
+                adapter,
+                task.torrent_hash,
+                meta=task.meta,
+                media_info=task.media_info,
+                event_task=task,
+            )
+
+    def _record_event_failure(self, task: _EventTask, error: Exception) -> None:
+        """
+        重试耗尽或真实失败不标记已处理，旧代次不得写入新实例的待处理状态。
+
+        :param task: 仍需确认所有权的事件任务
+        :param error: 暂态耗尽或不可重试的最终异常
+        """
+        with self._lock:
+            if not self._event_is_current(task):
+                return
+            reason = error.detail if isinstance(error, HTTPException) else str(error)
+            label = (
+                "暂未就绪，重试已耗尽"
+                if isinstance(error, _TorrentNotReady)
+                else "格式化失败"
+            )
+            logger.warning(f"{task.downloader}:{task.torrent_hash} {label}：{reason}")
+            try:
+                if not self._has_history(task.downloader, task.torrent_hash):
+                    self._set_pending(task.downloader, task.torrent_hash, reason)
+            except Exception as storage_error:  # noqa: BLE001 -- 保存终态失败不能覆盖原异常或触发操作重试
+                logger.warning(f"事件失败原因保存失败：{storage_error}")
 
     def cron_process_main(self):
         """
@@ -1566,6 +1741,23 @@ class TorrentFormatter(_PluginBase):
                         self._auto_process(name, adapter, summary.hash)
             except Exception as error:
                 logger.warning(f"下载器 {name} 自动扫描失败：{error}")
+
+    @staticmethod
+    def _downloader_name(
+        downloader: str | None, downloadhis: DownloadHistory | None = None
+    ) -> str | None:
+        """
+        复用单种子入口的默认下载器选择，事件与 main 不各自维护回退逻辑。
+
+        :param downloader: 可选显式名称
+        :param downloadhis: 可选已有下载历史
+        :return: 显式/历史/默认名称，无可用服务时为空
+        """
+        name = downloader or (downloadhis.downloader if downloadhis else None)
+        if not name:
+            service = DownloaderHelper().get_service(name=None)
+            name = service.name if service else None
+        return name
 
     def main(
         self,
@@ -1587,10 +1779,7 @@ class TorrentFormatter(_PluginBase):
         :param media_info: 事件媒体
         :return: 真正完成或无变更；排除/失败不冒充成功
         """
-        name = downloader or (downloadhis.downloader if downloadhis else None)
-        if not name:
-            service = DownloaderHelper().get_service(name=None)
-            name = service.name if service else None
+        name = self._downloader_name(downloader, downloadhis)
         if not name:
             logger.warning("未指定可用下载器，跳过格式化")
             return False
@@ -1619,9 +1808,10 @@ class TorrentFormatter(_PluginBase):
         downloadhis: DownloadHistory | None = None,
         meta: MetaBase | None = None,
         media_info: MediaInfo | None = None,
+        event_task: _EventTask | None = None,
     ) -> PreviewResponse | ExecutionResponse:
         """
-        自动流程使用同一个锁、计划与备份策略。
+        自动流程使用同一个锁、计划与备份策略，事件暂态在修改前直接传播。
 
         :param name: 下载器
         :param adapter: 局部连接
@@ -1630,26 +1820,41 @@ class TorrentFormatter(_PluginBase):
         :param downloadhis: 媒体历史
         :param meta: 可选元数据
         :param media_info: 可选媒体
+        :param event_task: 事件重试基线；普通 main/定时调用不自动重试
         :return: 跳过、无变更或实际执行回执
         """
         with self._lock:
             torrent = torrent or self._live(adapter, torrent_hash)
+            excluded = self._has_history(name, torrent.hash) or exclusion_reason(
+                torrent, self.config.exclude_dirs, self.config.exclude_tags
+            )
+            readiness = torrent_readiness(torrent)
+            if event_task is not None and not excluded and readiness.code != "ready":
+                logger.info(
+                    f"{name}:{torrent.hash} 暂未就绪：{readiness.message}；"
+                    f"状态={torrent.state or '-'}，原因={readiness.code}"
+                )
+                raise _TorrentNotReady(name, torrent.hash, readiness)
             request = PreviewRequest(downloader=name, torrent_hash=torrent.hash)
             preview = self._make_format_preview(
                 request, adapter, torrent, downloadhis, meta, media_info
             )
             if preview.status == "ready":
-                frozen = self._freeze_preview(preview)
-                return self._execute_token(frozen.preview_token, "format")
-            logger.info(f"{torrent.name}：{preview.message}")
-            excluded = (
-                self._has_history(name, torrent.hash)
-                or exclusion_reason(
-                    torrent, self.config.exclude_dirs, self.config.exclude_tags
-                )
-                or torrent.moving
-                or not torrent.metadata_complete
-            )
+                frozen = self._freeze_preview(preview, event_task=event_task)
+                try:
+                    result = self._execute_token(frozen.preview_token, "format")
+                except Exception as error:
+                    discarded = self._preview_store.discard_unclaimed(
+                        frozen.preview_token
+                    )
+                    if isinstance(error, _TorrentNotReady) and not discarded:
+                        raise HTTPException(
+                            409, "操作已开始或预览已失效，不自动重试；请查询操作结果"
+                        ) from error
+                    raise
+                logger.info(f"{name}:{torrent.hash}：{result.message}")
+                return result
+            logger.info(f"{name}:{torrent.hash}：{preview.message}")
             self._set_pending(
                 name,
                 torrent.hash,
@@ -2092,6 +2297,7 @@ class TorrentFormatter(_PluginBase):
         preview: PreviewResponse,
         history_id: str | None = None,
         db_restore: dict | None = None,
+        event_task: _EventTask | None = None,
     ) -> PreviewResponse:
         """
         冻结渲染与校验要素，仅就绪预览进入内存。
@@ -2099,6 +2305,7 @@ class TorrentFormatter(_PluginBase):
         :param preview: 只读预览
         :param history_id: 恢复记录身份
         :param db_restore: 原始数据库字段
+        :param event_task: 事件开始时的配置与下载记录基线，重试不能接受其变化
         :return: 带 token 的副本
         """
         if preview.status != "ready":
@@ -2106,19 +2313,117 @@ class TorrentFormatter(_PluginBase):
         plan = FrozenPlan(
             preview=preview,
             fingerprint=snapshot_fingerprint(preview.before),
-            config_fingerprint=self._config_fingerprint(preview.downloader),
+            config_fingerprint=event_task.config_fingerprint
+            if event_task is not None
+            else self._config_fingerprint(preview.downloader),
             history_id=history_id,
             history_fingerprint=self._history_signature(history_id)
             if history_id
             else "",
-            db_before=self._database_snapshot(preview.downloader, preview.torrent_hash),
+            db_before=deepcopy(event_task.db_before)
+            if event_task is not None
+            else self._database_snapshot(preview.downloader, preview.torrent_hash),
             db_restore=db_restore or {},
         )
         return self._preview_store.put(plan).preview
 
+    @staticmethod
+    def _reject_preflight(
+        preview: PreviewResponse,
+        actual: TorrentInfo,
+        message: str,
+        fields: tuple[str, ...] = (),
+        readiness: TorrentReadiness | None = None,
+    ) -> None:
+        """
+        记录执行前拒绝的真实原因，不输出凭据或完整文件列表。
+
+        :param preview: 已冻结的计划
+        :param actual: 实时详情
+        :param message: 用户可读的拒绝原因
+        :param fields: 实质变化或不满足的校验字段
+        :param readiness: 仅在确认没有持久冲突后提供的暂态就绪结论
+        :raises HTTPException: 尚未领取 token 的执行前冲突
+        """
+        logger.warning(
+            f"{preview.downloader}:{preview.torrent_hash} 执行前拒绝：{message}；"
+            f"状态={preview.before.state or '-'} -> {actual.state or '-'}；"
+            f"变化字段={','.join(fields) or '-'}；"
+            f"moving={actual.moving}，metadata_complete={actual.metadata_complete}，"
+            f"文件数={len(actual.files)}"
+        )
+        if readiness is not None:
+            raise _TorrentNotReady(preview.downloader, preview.torrent_hash, readiness)
+        raise HTTPException(409, message)
+
+    def _validate_execution_target(self, plan: FrozenPlan, actual: TorrentInfo) -> None:
+        """
+        先排除持久冲突，再检查完整布局与暂态就绪；此方法不产生修改。
+
+        :param plan: 服务端冻结计划
+        :param actual: 执行前实时详情
+        :raises HTTPException: 配置、记录、排除、身份布局或就绪校验不通过
+        """
+        preview = plan.preview
+        if self._config_fingerprint(preview.downloader) != plan.config_fingerprint:
+            self._reject_preflight(
+                preview,
+                actual,
+                "已保存规则、排除项或连接已改变，请重新预览",
+                ("config",),
+            )
+        if fingerprint(
+            self._database_snapshot(preview.downloader, preview.torrent_hash)
+        ) != fingerprint(plan.db_before):
+            self._reject_preflight(
+                preview, actual, "下载记录已改变，请重新预览", ("database",)
+            )
+        if preview.mode == "format":
+            if self._has_history(preview.downloader, preview.torrent_hash):
+                self._reject_preflight(
+                    preview, actual, "种子已有处理记录，请先恢复", ("history",)
+                )
+            if reason := exclusion_reason(
+                actual, self.config.exclude_dirs, self.config.exclude_tags
+            ):
+                self._reject_preflight(preview, actual, reason, ("exclusion",))
+        elif (
+            not self._record_by_id(plan.history_id)
+            or self._history_signature(plan.history_id) != plan.history_fingerprint
+        ):
+            self._reject_preflight(
+                preview, actual, "恢复记录已改变，请重新预览", ("recovery_history",)
+            )
+        readiness = torrent_readiness(actual)
+        if snapshot_fingerprint(actual) != plan.fingerprint:
+            changed = snapshot_changed_fields(preview.before, actual)
+            # 未就绪查询中的空文件/未知大小不等于真实布局改变，须等待完整详情。
+            unavailable = set()
+            if not actual.metadata_complete or not actual.files:
+                unavailable.add("total_size")
+            if not actual.files:
+                unavailable.add("files")
+            conflicts = tuple(field for field in changed if field not in unavailable)
+            if conflicts or not changed:
+                fields = conflicts or ("snapshot",)
+                self._reject_preflight(
+                    preview,
+                    actual,
+                    f"种子身份或布局已改变（{','.join(fields)}），请重新预览",
+                    fields,
+                )
+        if readiness.code != "ready":
+            self._reject_preflight(
+                preview,
+                actual,
+                readiness.message,
+                (f"readiness:{readiness.code}",),
+                readiness=readiness,
+            )
+
     def _execute_token(self, token: str, mode: str) -> ExecutionResponse:
         """
-        锁内重查目标与配置，过期/状态变化必须重新预览。
+        锁内重查目标与配置，过期或实质布局变化必须重新预览。
 
         :param token: 不透明 token
         :param mode: format/recover
@@ -2135,23 +2440,7 @@ class TorrentFormatter(_PluginBase):
             preview = plan.preview
             adapter = self._adapter(preview.downloader)
             actual = self._live(adapter, preview.torrent_hash)
-            if actual.moving or snapshot_fingerprint(actual) != plan.fingerprint:
-                raise HTTPException(409, "种子状态已改变或正在移动，请重新预览")
-            if self._config_fingerprint(preview.downloader) != plan.config_fingerprint:
-                raise HTTPException(409, "已保存规则、排除项或连接已改变，请重新预览")
-            if fingerprint(
-                self._database_snapshot(preview.downloader, preview.torrent_hash)
-            ) != fingerprint(plan.db_before):
-                raise HTTPException(409, "下载记录已改变，请重新预览")
-            if mode == "format" and self._has_history(
-                preview.downloader, preview.torrent_hash
-            ):
-                raise HTTPException(409, "种子已有处理记录，请先恢复")
-            if mode == "recover" and (
-                not self._record_by_id(plan.history_id)
-                or self._history_signature(plan.history_id) != plan.history_fingerprint
-            ):
-                raise HTTPException(409, "恢复记录已改变，请重新预览")
+            self._validate_execution_target(plan, actual)
             self._preview_store.claim(token)
             self._history_summary_cache.invalidate({preview.downloader})
             try:
@@ -2383,10 +2672,7 @@ class TorrentFormatter(_PluginBase):
         reason = reason or exclusion_reason(
             torrent, self.config.exclude_dirs, self.config.exclude_tags
         )
-        reason = reason or ("种子正在移动或校验，请等待完成" if torrent.moving else "")
-        reason = reason or (
-            "磁力种子元信息尚未就绪" if not torrent.metadata_complete else ""
-        )
+        reason = reason or torrent_readiness(torrent).message
         brief = None
         if not reason:
             try:

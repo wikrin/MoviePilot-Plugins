@@ -130,6 +130,20 @@ class PreviewStore:
             self._items[token] = _Ticket(plan, self.clock() + self.ttl)
         return deepcopy(plan)
 
+    def discard_unclaimed(self, token: str) -> bool:
+        """
+        仅丢弃尚未领取且没有回执的计划，重试不能清除已开始的操作。
+
+        :param token: 自动流程放弃的不透明 token
+        :return: 确认尚未执行并移除时返回 True，未知/已领取/已有回执返回 False
+        """
+        with self._lock:
+            ticket = self._items.get(token)
+            if ticket is None or ticket.claimed or ticket.result is not None:
+                return False
+            del self._items[token]
+            return True
+
     def lookup(self, token: str) -> tuple[FrozenPlan, ExecutionResponse | None]:
         """
         读取计划与幂等回执，拒绝未知或已到期的 token。
@@ -523,18 +537,34 @@ def project_database_paths(
             "/" + path_key(old_name, windows)
         ):
             mapped = normalized_path(full)[: -(len(old_name) + 1)] or "/"
-        if saved and mapped and path_key(saved, windows) != path_key(mapped, windows):
-            raise ValueError("下载记录完整路径与保存根不一致，停止推测映射")
+        saved_suffix = None
+        if saved and mapped:
+            path_type = PureWindowsPath if windows else PurePosixPath
+            try:
+                saved_suffix = path_type(normalized_path(saved)).relative_to(
+                    path_type(normalized_path(mapped))
+                )
+                path_type(old_name).relative_to(saved_suffix)
+            except ValueError as error:
+                raise ValueError(
+                    "下载记录中的文件路径与保存目录不匹配，无法安全更新记录，已停止处理"
+                ) from error
         if mapped:
             new_root = _mapped_root(mapped, before.save_path, actual.save_path)
             roots[mapped] = new_root
             payload["fullpath"] = normalized_path(new_root.rstrip("/") + "/" + new_name)
+            new_relative = new_name
             if saved is not None:
-                payload["savepath"] = new_root
+                payload["savepath"] = normalized_path(
+                    new_root.rstrip("/") + ("/" + saved_suffix.as_posix() if saved_suffix else "")
+                )
         elif full and path_key(full, windows) == path_key(old_name, windows):
             payload["fullpath"] = new_name
+            new_relative = new_name
+        else:
+            new_relative = new_name
         if relative:
-            payload["filepath"] = new_name
+            payload["filepath"] = new_relative
 
     old_common, new_common = _common_relative(before), _common_relative(actual)
     for payload in result.get("history", {}).values():
