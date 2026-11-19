@@ -1508,6 +1508,10 @@
 }
 
 @container (width <= 480px) {
+  .tf-history-path-row {
+    flex-wrap: wrap;
+  }
+
   .tf-page-controls {
     justify-content: center;
   }
@@ -1616,48 +1620,6 @@
   margin-inline-start: auto;
 }
 
-.tf-history-presence {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px;
-  margin-block-start: 12px;
-  border-radius: 8px;
-  background: rgba(var(--v-theme-info), 0.035);
-  font-size: 11px;
-  line-height: 1.8;
-}
-
-.tf-history-presence > .tf-history-presence-message {
-  flex: 1 1 240px;
-  min-inline-size: 0;
-  overflow-wrap: anywhere;
-}
-
-.tf-history-presence small {
-  display: block;
-  inline-size: 100%;
-  color: var(--tf-muted);
-  font-size: 10px;
-  overflow-wrap: anywhere;
-}
-
-.tf-history-presence .tf-history-checked {
-  padding-block-start: 2px;
-  border-block-start: var(--tf-border);
-}
-
-.tf-history-presence--missing,
-.tf-history-presence--unavailable {
-  background: rgba(var(--v-theme-warning), 0.05);
-}
-
-.tf-history-presence--conflict,
-.tf-history-presence--backup_missing {
-  background: rgba(var(--v-theme-error), 0.04);
-}
-
 .tf-history-actions {
   display: flex;
   align-items: center;
@@ -1665,23 +1627,118 @@
   gap: 6px;
 }
 
-.tf-history-title {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+.tf-history-card .tf-card-body {
+  padding: 9px 12px;
 }
 
 .tf-history-title-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: flex-start;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
   gap: 8px;
 }
 
-.tf-history-title-row > .v-checkbox-btn {
-  margin-block-start: -7px;
-  margin-inline-start: -8px;
+.tf-history-select-control {
+  display: flex;
+  width: 32px;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.tf-history-select-control .v-checkbox-btn {
+  flex: 0 0 28px;
+  width: 28px;
+}
+
+.tf-history-title {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  width: 100%;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.tf-history-title h3 {
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tf-history-statuses {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tf-history-compact-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-block-start: 4px;
+  margin-inline-start: 40px;
+}
+
+.tf-history-compact-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--tf-muted);
+  font-size: 10px;
+}
+
+.tf-history-path-row {
+  display: flex;
+  min-inline-size: 0;
+  align-items: center;
+  gap: 12px;
+  margin-block-start: 4px;
+  margin-inline-start: 40px;
+}
+
+.tf-history-primary-path {
+  display: flex;
+  min-inline-size: 0;
+  flex: 1 1 180px;
+  align-items: center;
+  gap: 5px;
+  color: var(--tf-muted);
+  font-size: 10px;
+}
+
+.tf-history-primary-path-label {
+  flex: 0 0 auto;
+}
+
+.tf-history-primary-path-value {
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tf-history-compact-hash {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 6px;
+  color: var(--tf-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.tf-history-path-row .tf-history-actions {
+  flex: 0 0 auto;
+  margin-inline-start: auto;
 }
 
 .tf-history-card--selected {
@@ -1689,21 +1746,8 @@
   box-shadow: inset 3px 0 rgba(var(--v-theme-primary), 0.72);
 }
 
-.tf-history-title h3 {
-  min-inline-size: 0;
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-
-.tf-history-path {
-  margin-block-start: 12px;
-  padding: 12px;
-  border-radius: 8px;
-  background: rgba(var(--v-theme-on-surface), 0.025);
-}
-
-.tf-history-card .tf-action-row > :first-child {
-  flex: 1 1 180px;
+.tf-history-stale-alert {
+  margin-block-start: 8px;
 }
 
 .tf-summary-warnings {

@@ -174,9 +174,6 @@ async function execute() {
   confirmation.value = false
   section.value = 'preview'
 }
-function askHistoryDeletion(item) {
-  openHistoryDeletion([item])
-}
 function askSelectedHistoryDeletion() {
   openHistoryDeletion(state.selectedHistory)
 }
@@ -446,7 +443,6 @@ onMounted(() => {
       @update:presence-filter="state.historyPresenceFilter = $event"
       @refresh="state.refreshHistory"
       @preview="previewHistory"
-      @request-delete="askHistoryDeletion"
       @toggle-selection="state.toggleHistorySelection"
       @toggle-page-selection="state.toggleCurrentHistoryPage"
       @request-delete-selected="askSelectedHistoryDeletion"

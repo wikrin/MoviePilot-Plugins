@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
+import { shortHash } from '../api/torrentformatter.js'
 import { PAGE_SIZE_OPTIONS } from '../composables/useTorrentFormatter.js'
 const props = defineProps({
   mobile: Boolean,
@@ -8,7 +9,7 @@ const props = defineProps({
   items: { type: Array, default: () => [] },
   total: { type: Number, default: 0 },
   page: { type: Number, default: 1 },
-  pageSize: { type: Number, default: 20 },
+  pageSize: { type: Number, default: 50 },
   loading: Boolean,
   busy: Boolean,
   error: { type: String, default: '' },
@@ -32,7 +33,6 @@ const emit = defineEmits([
   'update:presenceFilter',
   'refresh',
   'preview',
-  'request-delete',
   'toggle-selection',
   'toggle-page-selection',
   'request-delete-selected',
@@ -102,9 +102,6 @@ const resultOptions = [
 const selectedMap = computed(() => new Map(props.selectedItems.map(item => [item.id || item.history_id, item])))
 function date(value) {
   return value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleString() : '旧版备份'
-}
-function checkedAt(value) {
-  return value && !Number.isNaN(Date.parse(value)) ? new Date(value).toLocaleString() : '时间未知'
 }
 function selectable(item) {
   return Boolean(
@@ -235,35 +232,36 @@ function resetFilters() {
     >
       <div class="tf-card-body">
         <div class="tf-history-title-row">
-          <v-checkbox-btn
-            :model-value="selectedMap.has(item.id)"
-            :disabled="busy || loading || !selectable(item)"
-            color="primary"
-            :aria-label="`${selectedMap.has(item.id) ? '取消选择' : '选择'}历史记录 ${item.name}`"
-            @update:model-value="emit('toggle-selection', item, $event)"
-          />
+          <div class="tf-history-select-control">
+            <v-checkbox-btn
+              density="compact"
+              :model-value="selectedMap.has(item.id)"
+              :disabled="busy || loading || !selectable(item)"
+              color="primary"
+              :aria-label="`${selectedMap.has(item.id) ? '取消选择' : '选择'}历史记录 ${item.name}`"
+              @update:model-value="emit('toggle-selection', item, $event)"
+            />
+          </div>
           <div class="tf-history-title">
             <h3>{{ item.name }}</h3>
-            <v-chip :color="item.status === 'success' ? 'success' : 'warning'" size="x-small" variant="tonal">{{
-              labels[item.status] || item.status
-            }}</v-chip>
+            <div class="tf-history-statuses">
+              <v-chip :color="item.status === 'success' ? 'success' : 'warning'" size="x-small" variant="tonal">{{
+                labels[item.status] || item.status
+              }}</v-chip>
+              <v-chip
+                v-if="item.presence"
+                :color="presenceColors[item.presence.state]"
+                size="x-small"
+                variant="tonal"
+                >{{ presenceLabels[item.presence.state] }}</v-chip
+              >
+            </div>
           </div>
         </div>
-        <div class="tf-meta-line mt-2">
-          <span>原下载器：{{ item.downloader }}</span
-          ><span>{{ item.files_count }} 个文件</span><span>{{ date(item.created_at) }}</span>
-        </div>
-        <div v-if="item.presence" class="tf-history-presence" :class="`tf-history-presence--${item.presence.state}`">
-          <v-chip :color="presenceColors[item.presence.state]" size="x-small" variant="tonal">{{
-            presenceLabels[item.presence.state]
-          }}</v-chip>
-          <span class="tf-history-presence-message">{{ item.presence.message }}</span>
-          <small v-if="item.presence.target_downloader && item.presence.target_downloader !== item.downloader"
-            >已知当前目标：{{ item.presence.target_downloader }} · {{ item.presence.target_hash }}</small
-          >
-          <small class="tf-history-checked"
-            >核验于 {{ checkedAt(item.presence.checked_at) }} · {{ item.presence.cached ? '5 秒缓存' : '实时查询' }}</small
-          >
+        <div class="tf-history-compact-meta">
+          <span><v-icon icon="mdi-download-outline" size="14" aria-hidden="true" />{{ item.downloader }}</span>
+          <span><v-icon icon="mdi-file-multiple-outline" size="14" aria-hidden="true" />{{ item.files_count }} 个文件</span>
+          <span><v-icon icon="mdi-clock-outline" size="14" aria-hidden="true" />{{ date(item.created_at) }}</span>
         </div>
         <v-alert
           v-if="
@@ -274,21 +272,18 @@ function resetFilters() {
           variant="tonal"
           type="warning"
           density="compact"
-          class="mt-3"
-          >{{
-            selectedMap.get(item.id)?.selection_message || '关联备份状态已变化，请实时核验后重新确认'
-          }}</v-alert
+          class="tf-history-stale-alert"
+          >{{ selectedMap.get(item.id)?.selection_message || '关联备份状态已变化，请实时核验后重新确认' }}</v-alert
         >
-        <div class="tf-history-path">
-          <span class="tf-summary-label">原始保存路径</span
-          ><code class="tf-code-path">{{ item.save_path || '备份缺失' }}</code
-          ><template v-if="item.target_save_path && item.target_save_path !== item.save_path"
-            ><span class="tf-summary-label mt-2">计划处理路径</span
-            ><code class="tf-code-path">{{ item.target_save_path }}</code></template
-          >
-        </div>
-        <div class="tf-action-row">
-          <span class="tf-mono tf-muted">{{ item.torrent_hash }}</span>
+        <div class="tf-history-path-row">
+          <div class="tf-history-primary-path" :title="item.save_path || '备份缺失'">
+            <v-icon icon="mdi-folder-outline" size="14" aria-hidden="true" />
+            <span class="tf-history-primary-path-label">原路径</span>
+            <span class="tf-history-primary-path-value">{{ item.save_path || '备份缺失' }}</span>
+          </div>
+          <span class="tf-history-compact-hash" :title="item.torrent_hash">
+            <v-icon icon="mdi-pound" size="14" aria-hidden="true" />{{ shortHash(item.torrent_hash) }}
+          </span>
           <div class="tf-history-actions">
             <v-btn
               color="primary"
@@ -298,14 +293,6 @@ function resetFilters() {
               prepend-icon="mdi-backup-restore"
               @click="emit('preview', item)"
               >{{ item.history_stale ? '实时核验后预览' : item.restorable ? '查看恢复预览' : '暂不能恢复' }}</v-btn
-            ><v-btn
-              color="error"
-              variant="text"
-              size="small"
-              :disabled="busy || loading || !selectable(item)"
-              prepend-icon="mdi-delete-outline"
-              @click="emit('request-delete', item)"
-              >删除记录</v-btn
             >
           </div>
         </div>
