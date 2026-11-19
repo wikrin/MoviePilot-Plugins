@@ -451,6 +451,7 @@ class TorrentSummary(BaseModel):
     save_path: str
     total_size: int
     state: str = ""
+    tags: list[str] = Field(default_factory=list)
     processed: bool = False
 
 

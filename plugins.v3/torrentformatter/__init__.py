@@ -505,6 +505,7 @@ class TorrentFormatter(_PluginBase):
                     save_path=item.save_path,
                     total_size=item.total_size,
                     state=item.state,
+                    tags=list(item.tags),
                     processed=identity_key(downloader, item.hash) in processed_ids,
                 )
                 for item in items[start : start + page_size]

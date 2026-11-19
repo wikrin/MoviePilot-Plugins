@@ -83,7 +83,8 @@ const options = computed(() =>
             ><span class="tf-meta-line tf-torrent-facts"
               ><span class="tf-row-size">{{ formatSize(item.total_size) }}</span
                ><v-chip v-if="item.processed" size="x-small" color="warning" variant="tonal">需先恢复</v-chip
-               ><span v-if="item.state">{{ item.state }}</span></span
+               ><span v-if="item.state">{{ item.state }}</span
+              ><v-chip v-for="tag in item.tags || []" :key="tag" size="x-small" variant="tonal">{{ tag }}</v-chip></span
             ><span class="tf-torrent-location"
               ><span class="tf-torrent-path" :title="item.save_path">{{ item.save_path }}</span
               ><span class="tf-mono tf-muted" :title="item.hash">{{ shortHash(item.hash) }}</span></span

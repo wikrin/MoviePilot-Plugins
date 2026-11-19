@@ -20,6 +20,7 @@ export interface TorrentInfo {
   name: string
   save_path: string
   total_size: number
+  tags?: string[]
   files: TorrentFile[]
   auto_tmm: boolean
   category: string
