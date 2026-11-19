@@ -445,9 +445,9 @@ export function useTorrentFormatter(
       rulesInfo.value = rules
       if (!selected.value) draftRules.value = { ...rules.effective }
       const previous = selectedDownloader.value
-      selectedDownloader.value = clients.some(item => item.name === previous) ? previous : clients[0]?.name || ''
+      selectedDownloader.value = clients.some(item => item.name === previous) ? previous : ''
       initialized = true
-      await loadTorrents()
+      if (selectedDownloader.value) await loadTorrents()
     } catch (error) {
       if (id === initId && !disposed) errors.value.initial = errorMessage(error, '工作台初始化失败')
     } finally {

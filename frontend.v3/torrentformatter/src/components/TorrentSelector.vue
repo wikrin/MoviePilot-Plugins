@@ -48,6 +48,7 @@ const options = computed(() =>
           :model-value="downloader"
           :items="options"
           label="下载器"
+          placeholder="请选择下载器"
           :disabled="busy || !options.length"
           variant="outlined"
           density="compact"
@@ -119,14 +120,26 @@ const options = computed(() =>
         <div class="tf-empty-icon">
           <v-icon :icon="!downloaders.length ? 'mdi-download-off-outline' : 'mdi-file-search-outline'" size="26" />
         </div>
-        <h3>{{ !downloaders.length ? '还没有可用下载器' : query ? '没有找到匹配的种子' : '下载器中暂无种子' }}</h3>
+        <h3>
+          {{
+            !downloaders.length
+              ? '还没有可用下载器'
+              : !downloader
+                ? '请先选择下载器'
+                : query
+                  ? '没有找到匹配的种子'
+                  : '下载器中暂无种子'
+          }}
+        </h3>
         <p>
           {{
             !downloaders.length
               ? '请在 MoviePilot 设置中启用 qBittorrent 或 Transmission，然后刷新工作台。'
-              : query
-                ? '尝试更短的名称，或使用完整Hash 搜索。'
-                : '添加种子后刷新即可选择，无需开启本插件的定时或事件处理。'
+              : !downloader
+                ? '选择下载器后才会加载种子列表。'
+                : query
+                  ? '尝试更短的名称，或使用完整Hash 搜索。'
+                  : '添加种子后刷新即可选择，无需开启本插件的定时或事件处理。'
           }}
         </p>
       </div>
@@ -140,7 +153,7 @@ const options = computed(() =>
             density="compact"
             variant="outlined"
             hide-details
-            :disabled="busy || loading"
+            :disabled="busy || loading || !downloader"
             @update:model-value="emit('update:pageSize', Number($event))"
           />
         </div>
@@ -149,7 +162,7 @@ const options = computed(() =>
           :length="pages"
           :total-visible="5"
           density="comfortable"
-          :disabled="busy || loading"
+          :disabled="busy || loading || !downloader"
           aria-label="种子分页"
           @update:model-value="emit('update:page', $event)"
         />
