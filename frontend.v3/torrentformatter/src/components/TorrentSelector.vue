@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { formatSize, shortHash } from '../api/torrentformatter.js'
+import { PAGE_SIZE_OPTIONS } from '../composables/useTorrentFormatter.js'
 
 const props = defineProps({
   downloaders: { type: Array, default: () => [] },
@@ -15,8 +16,10 @@ const props = defineProps({
   busy: Boolean,
   error: { type: String, default: '' },
 })
-const emit = defineEmits(['update:downloader', 'update:query', 'update:page', 'select', 'refresh'])
+const emit = defineEmits(['update:downloader', 'update:query', 'update:page', 'update:pageSize', 'select', 'refresh'])
 const pages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
+const rangeStart = computed(() => (props.total ? (props.page - 1) * props.pageSize + 1 : 0))
+const rangeEnd = computed(() => Math.min(props.page * props.pageSize, props.total))
 const options = computed(() =>
   props.downloaders.map(item => ({
     title: `${item.name}${item.type === 'transmission' ? ' · Transmission' : item.type === 'qbittorrent' ? ' · qBittorrent' : ''}`,
@@ -84,7 +87,7 @@ const options = computed(() =>
               ><span class="tf-row-size">{{ formatSize(item.total_size) }}</span
                ><v-chip v-if="item.processed" size="x-small" color="warning" variant="tonal">需先恢复</v-chip
                ><span v-if="item.state">{{ item.state }}</span
-              ><v-chip v-for="tag in item.tags || []" :key="tag" size="x-small" variant="tonal">{{ tag }}</v-chip></span
+               ><v-chip v-for="tag in item.tags || []" :key="tag" size="x-small" variant="tonal">{{ tag }}</v-chip></span
             ><span class="tf-torrent-location"
               ><span class="tf-torrent-path" :title="item.save_path">{{ item.save_path }}</span
               ><span class="tf-mono tf-muted" :title="item.hash">{{ shortHash(item.hash) }}</span></span
@@ -107,25 +110,29 @@ const options = computed(() =>
           }}
         </p>
       </div>
-      <div class="tf-pagination">
-        <span>{{ total }} 个种子 · {{ page }} / {{ pages }} 页</span>
-        <div>
-          <v-btn
-            variant="text"
-            size="small"
-            :disabled="page <= 1 || loading || busy"
-            aria-label="上一页种子"
-            @click="emit('update:page', page - 1)"
-            >上一页</v-btn
-          ><v-btn
-            variant="text"
-            size="small"
-            :disabled="page >= pages || loading || busy"
-            aria-label="下一页种子"
-            @click="emit('update:page', page + 1)"
-            >下一页</v-btn
-          >
+      <div class="tf-pagination tf-page-controls">
+        <div class="tf-page-summary">
+          <span>{{ rangeStart }} - {{ rangeEnd }} / {{ total }} 个种子</span>
+          <v-select
+            :model-value="pageSize"
+            :items="PAGE_SIZE_OPTIONS"
+            aria-label="每页种子数量"
+            density="compact"
+            variant="outlined"
+            hide-details
+            :disabled="busy || loading"
+            @update:model-value="emit('update:pageSize', Number($event))"
+          />
         </div>
+        <v-pagination
+          :model-value="page"
+          :length="pages"
+          :total-visible="5"
+          density="comfortable"
+          :disabled="busy || loading"
+          aria-label="种子分页"
+          @update:model-value="emit('update:page', $event)"
+        />
       </div>
     </div>
   </section>

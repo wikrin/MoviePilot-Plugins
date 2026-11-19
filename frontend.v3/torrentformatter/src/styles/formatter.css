@@ -433,6 +433,26 @@
   font-size: 11px;
 }
 
+.tf-page-controls {
+  flex-wrap: wrap;
+}
+
+.tf-page-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.tf-page-summary .v-select {
+  inline-size: 78px;
+  flex: 0 0 78px;
+}
+
+.tf-page-controls .v-pagination {
+  margin-inline-start: auto;
+}
+
 .tf-empty {
   padding: 40px 18px;
   text-align: center;
@@ -1460,6 +1480,15 @@
 }
 
 @container (width <= 480px) {
+  .tf-page-controls {
+    justify-content: center;
+  }
+
+  .tf-page-summary,
+  .tf-page-controls .v-pagination {
+    margin-inline: auto;
+  }
+
   .tf-frame--history .tf-nav {
     margin-block-start: 12px;
   }

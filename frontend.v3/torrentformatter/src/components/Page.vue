@@ -284,6 +284,7 @@ onMounted(() => {
       @update:downloader="state.selectedDownloader = $event"
       @update:query="state.query = $event"
       @update:page="state.page = $event"
+      @update:page-size="state.pageSize = $event"
       @select="state.selectTorrent"
       @refresh="state.loadTorrents"
     />
@@ -423,6 +424,7 @@ onMounted(() => {
       :items="state.history.items"
       :total="state.history.total"
       :page="state.historyPage"
+      :page-size="state.historyPageSize"
       :loading="state.loading.history"
       :busy="working || state.loading.preview"
       :error="state.errors.history"
@@ -438,6 +440,7 @@ onMounted(() => {
       :lookup-loading="state.loading.historyLookup"
       :selection-limit="100"
       @update:page="state.historyPage = $event"
+      @update:page-size="state.historyPageSize = $event"
       @update:query="state.historyQuery = $event"
       @update:result-filter="state.historyResultFilter = $event"
       @update:presence-filter="state.historyPresenceFilter = $event"

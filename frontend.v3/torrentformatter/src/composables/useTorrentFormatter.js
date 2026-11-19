@@ -8,7 +8,8 @@ import {
 } from '../api/torrentformatter.js'
 
 export const HISTORY_SELECTION_LIMIT = 100
-const HISTORY_PAGE_SIZE = 20
+export const PAGE_SIZE_OPTIONS = [20, 50, 100]
+const DEFAULT_PAGE_SIZE = 20
 
 function cloneValue(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
@@ -45,7 +46,7 @@ export function useTorrentFormatter(
   const selectedDownloader = ref('')
   const query = ref('')
   const page = ref(1)
-  const pageSize = ref(25)
+  const pageSize = ref(DEFAULT_PAGE_SIZE)
   const torrents = shallowRef({ items: [], total: 0, capabilities: null })
   const selected = shallowRef(null)
   const detail = shallowRef(null)
@@ -65,6 +66,7 @@ export function useTorrentFormatter(
   const recoveryTarget = shallowRef(null)
   const history = shallowRef({ items: [], total: 0 })
   const historyPage = ref(1)
+  const historyPageSize = ref(DEFAULT_PAGE_SIZE)
   const historyQuery = ref('')
   const historyResultFilter = ref('all')
   const historyPresenceFilter = ref('all')
@@ -312,6 +314,7 @@ export function useTorrentFormatter(
   function currentHistoryKey(pageNumber = historyPage.value) {
     return JSON.stringify([
       Number(pageNumber),
+      historyPageSize.value,
       historyQuery.value,
       historyResultFilter.value,
       historyPresenceFilter.value,
@@ -729,7 +732,7 @@ export function useTorrentFormatter(
       try {
         const data = await api.history(
           requestedPage,
-          HISTORY_PAGE_SIZE,
+          historyPageSize.value,
           {
             query: historyQuery.value,
             result_filter: historyResultFilter.value,
@@ -753,7 +756,7 @@ export function useTorrentFormatter(
             unknownHistoryIds.value.has(historyIdentity(item)),
           deletion_unknown: unknownHistoryIds.value.has(historyIdentity(item)),
         }))
-        const lastPage = Math.max(1, Math.ceil(Number(data.total) / HISTORY_PAGE_SIZE))
+        const lastPage = Math.max(1, Math.ceil(Number(data.total) / historyPageSize.value))
         if (requestedPage > lastPage && Number(data.total) > 0) {
           setHistoryPageSilently(lastPage)
           retryLastPage = true
@@ -903,7 +906,7 @@ export function useTorrentFormatter(
     const nextSelection = new Map(historySelection.value)
     for (const id of removed) nextSelection.delete(id)
     replaceHistorySelection(nextSelection)
-    const lastPage = Math.max(1, Math.ceil(history.value.total / HISTORY_PAGE_SIZE))
+    const lastPage = Math.max(1, Math.ceil(history.value.total / historyPageSize.value))
     if (!history.value.items.length && history.value.total > 0) {
       setHistoryPageSilently(Math.min(historyPage.value, lastPage))
       return true
@@ -1212,6 +1215,10 @@ export function useTorrentFormatter(
   watch(page, () => {
     if (initialized) void loadTorrents()
   })
+  watch(pageSize, () => {
+    if (page.value !== 1) page.value = 1
+    else if (initialized) void loadTorrents()
+  })
   watch([historyQuery, historyResultFilter, historyPresenceFilter], (values, previous) => {
     if (loading.value.historyDelete) return
     clearTimeout(historyTimer)
@@ -1228,6 +1235,14 @@ export function useTorrentFormatter(
       },
       values[0] !== previous[0] ? 300 : 0,
     )
+  })
+  watch(historyPageSize, () => {
+    clearTimeout(historyTimer)
+    stopHistoryRequest()
+    historyLoadedKey = ''
+    historyLoadedAt = 0
+    setHistoryPageSilently(1)
+    if (initialized) void loadHistory()
   })
   watch(historyPage, () => {
     if (skipHistoryPageWatch) {
@@ -1262,6 +1277,7 @@ export function useTorrentFormatter(
     result,
     history,
     historyPage,
+    historyPageSize,
     historyQuery,
     historyResultFilter,
     historyPresenceFilter,

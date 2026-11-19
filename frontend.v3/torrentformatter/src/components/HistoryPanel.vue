@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref, watchEffect } from 'vue'
+import { PAGE_SIZE_OPTIONS } from '../composables/useTorrentFormatter.js'
 const props = defineProps({
   mobile: Boolean,
   scrollElement: { type: Object, default: null },
@@ -7,6 +8,7 @@ const props = defineProps({
   items: { type: Array, default: () => [] },
   total: { type: Number, default: 0 },
   page: { type: Number, default: 1 },
+  pageSize: { type: Number, default: 20 },
   loading: Boolean,
   busy: Boolean,
   error: { type: String, default: '' },
@@ -24,6 +26,7 @@ const props = defineProps({
 })
 const emit = defineEmits([
   'update:page',
+  'update:pageSize',
   'update:query',
   'update:resultFilter',
   'update:presenceFilter',
@@ -35,7 +38,9 @@ const emit = defineEmits([
   'request-delete-selected',
   'verify-selected',
 ])
-const pages = computed(() => Math.max(1, Math.ceil(props.total / 20)))
+const pages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)))
+const rangeStart = computed(() => (props.total ? (props.page - 1) * props.pageSize + 1 : 0))
+const rangeEnd = computed(() => Math.min(props.page * props.pageSize, props.total))
 const filtered = computed(() => Boolean(props.query || props.resultFilter !== 'all' || props.presenceFilter !== 'all'))
 const filterSheet = ref(false)
 const filterButton = ref(null)
@@ -322,23 +327,29 @@ function resetFilters() {
     </div>
     </div>
     <Teleport :to="paginationTarget || 'body'" :disabled="!mobile || !paginationTarget">
-    <div class="tf-pagination tf-history-pagination" aria-label="处理历史分页">
-      <span>{{ total }} 条匹配记录 · {{ page }} / {{ pages }} 页</span>
-      <div>
-        <v-btn
-          size="small"
-          variant="text"
-          :disabled="busy || loading || page <= 1"
-          @click="emit('update:page', page - 1)"
-          >上一页</v-btn
-        ><v-btn
-          size="small"
-          variant="text"
-          :disabled="busy || loading || page >= pages"
-          @click="emit('update:page', page + 1)"
-          >下一页</v-btn
-        >
+    <div class="tf-pagination tf-history-pagination tf-page-controls" aria-label="处理历史分页">
+      <div class="tf-page-summary">
+        <span>{{ rangeStart }} - {{ rangeEnd }} / {{ total }} 条匹配记录</span>
+        <v-select
+          :model-value="pageSize"
+          :items="PAGE_SIZE_OPTIONS"
+          aria-label="每页历史记录数量"
+          density="compact"
+          variant="outlined"
+          hide-details
+          :disabled="busy || loading"
+          @update:model-value="emit('update:pageSize', Number($event))"
+        />
       </div>
+      <v-pagination
+        :model-value="page"
+        :length="pages"
+        :total-visible="5"
+        density="comfortable"
+        :disabled="busy || loading"
+        aria-label="历史记录分页"
+        @update:model-value="emit('update:page', $event)"
+      />
     </div>
     </Teleport>
     <v-bottom-sheet v-model="filterSheet" :activator="filterButton" :open-on-click="false"
