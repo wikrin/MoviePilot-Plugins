@@ -81,17 +81,37 @@ const options = computed(() =>
           :disabled="busy"
           @click="emit('select', item)"
         >
-          <span class="tf-torrent-copy"
-            ><strong :title="item.name">{{ item.name }}</strong
-            ><span class="tf-meta-line tf-torrent-facts"
-              ><span class="tf-row-size">{{ formatSize(item.total_size) }}</span
-               ><v-chip v-if="item.processed" size="x-small" color="warning" variant="tonal">需先恢复</v-chip
-               ><span v-if="item.state">{{ item.state }}</span
-               ><v-chip v-for="tag in item.tags || []" :key="tag" size="x-small" variant="tonal">{{ tag }}</v-chip></span
-            ><span class="tf-torrent-location"
-              ><span class="tf-torrent-path" :title="item.save_path">{{ item.save_path }}</span
-              ><span class="tf-mono tf-muted" :title="item.hash">{{ shortHash(item.hash) }}</span></span
-             ></span
+          <span class="tf-torrent-copy">
+            <span class="tf-torrent-title">
+              <strong :title="item.name">{{ item.name }}</strong>
+              <v-chip
+                v-if="item.processed"
+                size="x-small"
+                color="warning"
+                variant="tonal"
+                prepend-icon="mdi-backup-restore"
+                >需先恢复</v-chip
+              >
+            </span>
+            <span class="tf-torrent-meta">
+              <span class="tf-torrent-meta-item tf-row-size">
+                <v-icon icon="mdi-database-outline" size="14" aria-hidden="true" />
+                {{ formatSize(item.total_size) }}
+              </span>
+              <span v-if="item.state" class="tf-torrent-meta-item tf-torrent-state">
+                <v-icon icon="mdi-download-outline" size="14" aria-hidden="true" />
+                {{ item.state }}
+              </span>
+              <span v-if="item.tags?.length" class="tf-torrent-meta-item tf-torrent-tags" aria-label="种子标签">
+                <v-icon icon="mdi-tag-multiple-outline" size="14" aria-hidden="true" />
+                <v-chip v-for="tag in item.tags" :key="tag" size="x-small" variant="tonal">{{ tag }}</v-chip>
+              </span>
+            </span>
+            <span class="tf-torrent-location">
+              <span class="tf-torrent-path" :title="item.save_path">{{ item.save_path }}</span>
+              <span class="tf-mono tf-muted" :title="item.hash">{{ shortHash(item.hash) }}</span>
+            </span>
+          </span>
           >
         </button>
       </div>

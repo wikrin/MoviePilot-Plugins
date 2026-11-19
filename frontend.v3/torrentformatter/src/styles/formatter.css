@@ -398,14 +398,42 @@
   margin-block-start: 6px;
 }
 
-.tf-row-size {
+.tf-torrent-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.tf-torrent-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 16px;
+  row-gap: 7px;
+  margin-block-start: 7px;
+}
+
+.tf-torrent-meta-item {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
   color: var(--tf-muted);
   font-size: 11px;
 }
 
-.tf-torrent-facts {
-  margin-block-start: 5px;
+.tf-row-size {
+  white-space: nowrap;
+}
+
+.tf-torrent-state {
+  overflow-wrap: anywhere;
+}
+
+.tf-torrent-tags {
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 .tf-selection-status {
