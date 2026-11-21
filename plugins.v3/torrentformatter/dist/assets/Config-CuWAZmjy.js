@@ -1,0 +1,1 @@
+import{h as t,i as s,b as a,R as e}from"./Page-DX4ogD9t.js";const i=Object.assign({inheritAttrs:!1},{__name:"Config",setup:i=>(i,n)=>(s(),t(a,e(i.$attrs,{"start-section":"automation"}),null,16))});export{i as default};
