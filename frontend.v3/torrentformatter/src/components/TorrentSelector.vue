@@ -29,7 +29,7 @@ const options = computed(() =>
 </script>
 
 <template>
-  <section>
+  <section class="tf-torrent-selector">
     <div class="tf-heading">
       <div>
         <span class="tf-eyebrow">01 / SELECT A TORRENT</span>
@@ -41,13 +41,14 @@ const options = computed(() =>
       ><span>{{ error }}</span
       ><v-btn size="small" variant="text" @click="emit('refresh')">重试</v-btn></v-alert
     >
-    <div class="tf-card">
+    <div class="tf-card tf-torrent-card">
       <div class="tf-toolbar">
         <v-select
           class="tf-downloader-field"
           :model-value="downloader"
           :items="options"
           label="下载器"
+          aria-label="下载器"
           placeholder="请选择下载器"
           :disabled="busy || !options.length"
           variant="outlined"
@@ -70,6 +71,7 @@ const options = computed(() =>
         />
       </div>
       <v-progress-linear v-if="loading" color="primary" indeterminate aria-label="正在加载种子" />
+      <div class="tf-torrent-records" tabindex="0" role="region" aria-label="可选种子">
       <div v-if="items.length" class="tf-torrent-list" aria-label="种子列表">
         <button
           v-for="item in items"
@@ -143,7 +145,8 @@ const options = computed(() =>
           }}
         </p>
       </div>
-      <div class="tf-pagination tf-page-controls">
+      </div>
+      <div class="tf-pagination tf-torrent-pagination tf-page-controls" aria-label="选择种子分页">
         <div class="tf-page-summary">
           <span>{{ rangeStart }} - {{ rangeEnd }} / {{ total }} 个种子</span>
           <v-select

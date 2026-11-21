@@ -535,6 +535,14 @@ def project_database_paths(
     :return: 不修改输入的字段快照
     """
     result = deepcopy(db_before)
+    # 显示名、自动管理等非布局变化不能顺带规范化数据库中的路径字段。
+    # 比较文件身份及路径，忽略顺序、优先级和选择状态等非路径属性。
+    if normalized_path(before.save_path) == normalized_path(actual.save_path) and {
+        file.index: (normalized_path(file.name), file.size) for file in before.files
+    } == {
+        file.index: (normalized_path(file.name), file.size) for file in actual.files
+    }:
+        return result
     windows = is_windows_path(before.save_path)
     current_files = {file.index: file for file in actual.files}
     names = {

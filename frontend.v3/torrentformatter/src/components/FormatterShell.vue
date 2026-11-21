@@ -9,19 +9,25 @@ defineProps({
   section: { type: String, default: '' },
   sections: { type: Array, default: () => [] },
   busy: Boolean,
+  workspace: Boolean,
   showSwitch: { type: Boolean, default: true },
 })
-const emit = defineEmits(['update:section', 'close', 'switch', 'refresh'])
+const emit = defineEmits(['update:section', 'update:mobile', 'close', 'switch', 'refresh'])
 const root = ref(null)
 const layout = ref(null)
 const paginationHost = ref(null)
 const mobile = ref(false)
 const availableHeight = ref('90dvh')
 let observer
+let measureFrame
 function measureHeight() {
   if (root.value) {
     availableHeight.value = `${Math.max(320, window.innerHeight - Math.max(0, root.value.getBoundingClientRect().top) - 12)}px`
-    mobile.value = root.value.getBoundingClientRect().width < 720
+    const isMobile = root.value.getBoundingClientRect().width < 720
+    if (mobile.value !== isMobile) {
+      mobile.value = isMobile
+      emit('update:mobile', isMobile)
+    }
   }
 }
 onMounted(async () => {
@@ -29,19 +35,23 @@ onMounted(async () => {
   measureHeight()
   window.addEventListener('resize', measureHeight)
   if (typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver(measureHeight)
+    observer = new ResizeObserver(() => {
+      cancelAnimationFrame(measureFrame)
+      measureFrame = requestAnimationFrame(measureHeight)
+    })
     observer.observe(root.value)
   }
 })
 onUnmounted(() => {
   window.removeEventListener('resize', measureHeight)
   observer?.disconnect()
+  cancelAnimationFrame(measureFrame)
 })
 </script>
 
 <template>
   <section ref="root" class="tf-shell" :style="{ '--tf-available-height': availableHeight }">
-    <div class="tf-frame" :class="{ 'tf-frame--history': section === 'history' }">
+    <div class="tf-frame" :class="{ 'tf-frame--history': section === 'history', 'tf-frame--workspace': workspace && section !== 'history', 'tf-frame--selection': workspace && section === 'select' }">
       <header class="tf-header">
         <div class="tf-brand">
           <div class="tf-brand-mark" aria-hidden="true">
@@ -138,13 +148,19 @@ onUnmounted(() => {
         <main class="tf-main">
           <slot :mobile="mobile" :scroll-element="layout" :pagination-target="paginationHost" />
         </main>
-        <aside class="tf-aside" aria-label="本次影响摘要">
-          <slot name="summary" />
+        <aside class="tf-aside" :class="{ 'tf-aside--actions': $slots['summary-actions'] }" aria-label="本次影响摘要">
+          <div v-if="$slots['summary-actions']" class="tf-aside-content">
+            <slot name="summary" />
+          </div>
+          <slot v-else name="summary" />
+          <div v-if="$slots['summary-actions']" class="tf-aside-actions">
+            <slot name="summary-actions" />
+          </div>
         </aside>
       </div>
       <div ref="paginationHost" class="tf-pagination-host" />
       <div class="tf-mobile-dock">
-        <slot name="actions" />
+        <slot name="actions" :mobile="mobile" />
       </div>
     </div>
   </section>

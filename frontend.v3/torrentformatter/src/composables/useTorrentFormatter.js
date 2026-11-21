@@ -9,7 +9,8 @@ import {
 
 export const HISTORY_SELECTION_LIMIT = 100
 export const PAGE_SIZE_OPTIONS = [20, 50, 100]
-const DEFAULT_PAGE_SIZE = 20
+export const MOBILE_PAGE_SIZE = 20
+const DEFAULT_PAGE_SIZE = MOBILE_PAGE_SIZE
 
 function cloneValue(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value))
@@ -492,6 +493,17 @@ export function useTorrentFormatter(
     } finally {
       if (id === listId) loading.value.list = false
     }
+  }
+
+  function setTorrentPagination({ page: nextPage, pageSize: nextSize }) {
+    if (loading.value.execute || loading.value.historyDelete || disposed) return false
+    if (!PAGE_SIZE_OPTIONS.includes(nextSize) || !Number.isInteger(nextPage) || nextPage < 1) return false
+    const pages = Math.max(1, Math.ceil(torrents.value.total / nextSize))
+    if (nextPage > pages) return false
+    // 数量变更先同步重置页码，再应用指定页；组合 watcher 只提交一次列表请求。
+    pageSize.value = nextSize
+    page.value = nextPage
+    return true
   }
 
   async function selectTorrent(item) {
@@ -1212,12 +1224,9 @@ export function useTorrentFormatter(
       if (initialized) void loadTorrents()
     }, 300)
   })
-  watch(page, () => {
+  watch(pageSize, () => { page.value = 1 }, { flush: 'sync' })
+  watch([page, pageSize], () => {
     if (initialized) void loadTorrents()
-  })
-  watch(pageSize, () => {
-    if (page.value !== 1) page.value = 1
-    else if (initialized) void loadTorrents()
   })
   watch([historyQuery, historyResultFilter, historyPresenceFilter], (values, previous) => {
     if (loading.value.historyDelete) return
@@ -1265,6 +1274,7 @@ export function useTorrentFormatter(
     query,
     page,
     pageSize,
+    setTorrentPagination,
     torrents,
     selected,
     detail,

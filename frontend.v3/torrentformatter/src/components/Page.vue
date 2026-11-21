@@ -2,11 +2,12 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import FormatterShell from './FormatterShell.vue'
 import TorrentSelector from './TorrentSelector.vue'
+import TorrentPaginationMenu from './TorrentPaginationMenu.vue'
 import MediaSelector from './MediaSelector.vue'
 import RuleEditor from './RuleEditor.vue'
 import TorrentPreview from './TorrentPreview.vue'
 import HistoryPanel from './HistoryPanel.vue'
-import { useTorrentFormatter } from '../composables/useTorrentFormatter.js'
+import { MOBILE_PAGE_SIZE, useTorrentFormatter } from '../composables/useTorrentFormatter.js'
 import { formatSize, shortHash } from '../api/torrentformatter.js'
 import { RESULT_COLORS, RESULT_LABELS } from '../utils/torrentTree.js'
 
@@ -19,6 +20,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'switch', 'save', 'layout'])
 const state = reactive(useTorrentFormatter(() => props.api))
 const section = ref('select')
+const mobileLayout = ref(false)
 const confirmation = ref(false)
 const acknowledged = ref(false)
 const confirmedPreview = ref(null)
@@ -27,6 +29,13 @@ const deleteAcknowledged = ref(false)
 const historyToDelete = ref([])
 const working = computed(() => state.loading.execute || state.loading.historyDelete || state.loading.historyLookup)
 const deleteAttempted = computed(() => state.historyDeleteResults.length > 0)
+watch([mobileLayout, () => state.pageSize, working], ([mobile, size, busy]) => {
+  if (!mobile || size === MOBILE_PAGE_SIZE || busy) return
+  // 跨入手机布局时保留当前范围的起点，换算成固定 20 条的页码。
+  const page = Math.floor((state.page - 1) * size / MOBILE_PAGE_SIZE) + 1
+  const pages = Math.max(1, Math.ceil(state.torrents.total / MOBILE_PAGE_SIZE))
+  state.setTorrentPagination({ page: Math.min(page, pages), pageSize: MOBILE_PAGE_SIZE })
+})
 const deleteHasUnknown = computed(() => state.historyDeleteResults.some(item => item.status === 'unknown'))
 const canDeleteHistory = computed(
   () =>
@@ -60,6 +69,10 @@ const canContinue = computed(() =>
     !working.value,
   ),
 )
+const previousSection = computed(() => ({ media: 'select', rules: 'media', preview: recovering.value ? 'history' : 'rules' })[section.value])
+const nextSection = computed(() => ({ select: 'media', media: 'rules', rules: 'preview' })[section.value])
+const nextLabel = computed(() => ({ select: '下一步：媒体信息', media: '下一步：本次规则', rules: '下一步：变更预览' })[section.value])
+const navigationBusy = computed(() => working.value || state.loading.preview)
 const selectionStatus = computed(() =>
   state.loading.detail
     ? '正在读取种子详情…'
@@ -88,9 +101,6 @@ const canGenerate = computed(() =>
 const confirmReady = computed(
   () =>
     acknowledged.value && state.canExecute && confirmedPreview.value?.preview_token === state.preview?.preview_token,
-)
-const changedCount = computed(() =>
-  state.preview ? state.preview.changes.filter(item => item.status === 'changed').length : 0,
 )
 const confirmedCount = computed(() =>
   state.result ? state.result.operations.filter(item => item.status === 'confirmed').length : 0,
@@ -123,6 +133,14 @@ async function continueToMedia() {
   if (await state.ensureSelectedTargetFresh()) {
     if (section.value === 'select' && identity === state.targetKey && canContinue.value) navigate('media')
   }
+}
+function previousStep() {
+  if (!navigationBusy.value && previousSection.value) navigate(previousSection.value)
+}
+async function nextStep() {
+  if (!canContinue.value || !nextSection.value) return
+  if (section.value === 'select') return continueToMedia()
+  navigate(nextSection.value)
 }
 async function preview() {
   const data = recovering.value
@@ -248,8 +266,10 @@ onMounted(() => {
     :section="section"
     :sections="sections"
     :busy="working"
+    workspace
     :show-switch="show_switch"
     @update:section="navigate"
+    @update:mobile="mobileLayout = $event"
     @close="close"
     @switch="switchConfig"
     @refresh="state.refresh"
@@ -293,11 +313,6 @@ onMounted(() => {
       此种子已有处理记录，需要先恢复。
       <v-btn size="small" variant="text" :disabled="working" @click="navigate('history')">查看处理历史</v-btn>
     </v-alert>
-    <div class="tf-action-row tf-selection-actions">
-      <span class="tf-selection-status" role="status">{{ selectionStatus }}</span>
-      <v-btn v-if="!mobile" color="primary" variant="tonal" :disabled="!canContinue" :loading="state.loading.detail"
-        @click="continueToMedia">下一步：媒体信息</v-btn>
-    </div>
     </template>
     <template v-else-if="section === 'media' || section === 'rules'">
       <v-alert v-if="state.errors.detail" type="error" variant="tonal" density="compact" class="tf-inline-alert">{{
@@ -358,20 +373,6 @@ onMounted(() => {
             </div>
           </div>
         </template>
-        <div class="tf-action-row">
-          <v-btn variant="text" size="small" @click="navigate(section === 'media' ? 'select' : 'media')">上一步</v-btn
-          ><v-btn v-if="section === 'media'" color="primary" variant="tonal" @click="navigate('rules')"
-            >下一步：本次规则</v-btn
-          ><v-btn
-            v-else
-            color="primary"
-            variant="flat"
-            :loading="state.loading.preview"
-            :disabled="!state.canPreview"
-            @click="preview"
-            >生成变更预览</v-btn
-          >
-        </div>
       </template>
     </template>
     <template v-else-if="section === 'preview'">
@@ -520,6 +521,7 @@ onMounted(() => {
         </div>
         <div v-else class="tf-summary-note">从左侧选择一个种子。这里会持续显示明确目标、处理范围及风险。</div>
         <div v-if="section === 'select'" class="tf-summary-block">
+          <p class="tf-selection-status tf-selection-actions" role="status">{{ selectionStatus }}</p>
           <span class="tf-summary-label">先核对目标，再继续</span>
           <p class="tf-summary-note">请确认名称、下载器与保存路径。下一步核对媒体身份，此处不会修改下载任务或文件。</p>
         </div>
@@ -577,55 +579,6 @@ onMounted(() => {
         <v-alert v-if="state.expired && !state.result" variant="tonal" type="warning" density="compact" class="mt-3"
           >预览已过期，请重新生成。</v-alert
         >
-        <div class="tf-summary-action">
-          <template v-if="state.result"
-            ><v-btn
-              v-if="state.result.can_recover"
-              block
-              color="primary"
-              variant="tonal"
-              :disabled="state.result.actual?.moving"
-              @click="recoverResult"
-              >核对恢复预览</v-btn
-            ><v-btn v-else block color="primary" variant="tonal" @click="navigate('select')">再次选择种子</v-btn
-            ><v-btn block variant="text" class="mt-2" @click="navigate('history')">处理历史</v-btn></template
-          >
-          <template v-else
-            ><v-btn
-              v-if="state.canExecute"
-              block
-              :color="recovering ? 'warning' : 'primary'"
-              variant="flat"
-              @click="askConfirmation"
-              >{{ recovering ? '确认恢复此种子' : '确认处理此种子' }}</v-btn
-            ><v-btn
-              v-else
-              block
-              color="primary"
-              variant="flat"
-              :disabled="!canGenerate"
-              :loading="state.loading.preview || state.loading.execute"
-              @click="preview"
-              >{{ state.preview ? '重新生成预览' : '生成只读预览' }}</v-btn
-            ><v-btn
-              v-if="state.detail?.processed && !recovering"
-              block
-              color="warning"
-              variant="text"
-              class="mt-2"
-              @click="navigate('history')"
-              >先恢复已处理种子</v-btn
-            ><v-btn
-              v-else-if="state.preview && state.canExecute"
-              block
-              variant="text"
-              size="small"
-              class="mt-2"
-              @click="preview"
-              >重新计算</v-btn
-            ></template
-          >
-        </div>
         <p class="tf-summary-note">
           {{
             state.result
@@ -638,7 +591,34 @@ onMounted(() => {
         </template>
       </div>
     </template>
-    <template #actions>
+    <template v-if="section !== 'history'" #summary-actions>
+      <div class="tf-summary-action">
+        <template v-if="section === 'preview' && state.result">
+          <v-btn v-if="state.result.can_recover" block color="primary" variant="tonal"
+            :disabled="navigationBusy || state.result.actual?.moving" @click="recoverResult">核对恢复预览</v-btn>
+          <v-btn v-else block color="primary" variant="tonal" :disabled="navigationBusy" @click="navigate('select')">再次选择种子</v-btn>
+          <v-btn block variant="text" class="mt-2" :disabled="navigationBusy" @click="navigate('history')">处理历史</v-btn>
+        </template>
+        <template v-else-if="section !== 'select'">
+          <v-btn v-if="section === 'preview' && state.canExecute" block
+            :color="recovering ? 'warning' : 'primary'" variant="flat" :disabled="navigationBusy"
+            @click="askConfirmation">{{ recovering ? '确认恢复此种子' : '确认处理此种子' }}</v-btn>
+          <v-btn v-else block color="primary" variant="flat" :disabled="!canGenerate"
+            :loading="state.loading.preview || state.loading.execute" @click="preview"
+            >{{ section === 'rules' ? '生成变更预览' : state.preview ? '重新生成预览' : '生成只读预览' }}</v-btn>
+          <v-btn v-if="state.detail?.processed && !recovering" block color="warning" variant="text" class="mt-2"
+            :disabled="navigationBusy" @click="navigate('history')">先恢复已处理种子</v-btn>
+          <v-btn v-else-if="section === 'preview' && state.canExecute" block variant="text" size="small" class="mt-2"
+            :disabled="navigationBusy" @click="preview">重新计算</v-btn>
+        </template>
+        <div class="tf-step-navigation">
+          <v-btn v-if="previousSection" variant="text" size="small" :disabled="navigationBusy" @click="previousStep">上一步</v-btn>
+          <v-btn v-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue" :aria-label="nextLabel"
+            :loading="section === 'select' && state.loading.detail" @click="nextStep">{{ section === 'select' ? nextLabel : '下一步' }}</v-btn>
+        </div>
+      </div>
+    </template>
+    <template #actions="{ mobile }">
       <template v-if="section === 'history'"
         ><span>{{ state.history.total }} 条匹配记录</span
         ><v-btn
@@ -650,36 +630,23 @@ onMounted(() => {
           >刷新历史</v-btn
         ></template
       >
-      <template v-else-if="section === 'select'">
-        <span class="tf-selection-status">{{ state.loading.detail ? '正在读取详情' : state.errors.detail ? '请重试详情' : state.selected ? '已选择 1 个种子' : '请选择种子' }}</span>
-        <v-btn color="primary" variant="tonal" :disabled="!canContinue" :loading="state.loading.detail"
-          @click="continueToMedia">下一步：媒体信息</v-btn>
-      </template>
       <template v-else>
-        <span>{{
-          state.result
-            ? RESULT_LABELS[state.result.status]
-            : state.preview
-              ? `${changedCount} 项计划变化`
-              : '先预览，再执行'
-        }}</span>
-        <v-btn
-          v-if="state.canExecute"
-          :color="recovering ? 'warning' : 'primary'"
-          variant="flat"
-          @click="askConfirmation"
-          >{{ recovering ? '确认恢复' : '确认处理' }}</v-btn
-        >
-        <v-btn v-else-if="state.result" color="primary" variant="tonal" @click="navigate('history')">处理历史</v-btn>
-        <v-btn
-          v-else
-          color="primary"
-          variant="flat"
-          :disabled="!canGenerate"
-          :loading="state.loading.preview || state.loading.execute"
-          @click="preview"
-          >生成预览</v-btn
-        >
+        <v-btn v-if="previousSection" variant="text" :disabled="navigationBusy" @click="previousStep">上一步</v-btn>
+        <TorrentPaginationMenu v-else-if="mobile" :total="state.torrents.total" :page="state.page"
+          :disabled="working || state.loading.list || !state.selectedDownloader" @apply="state.setTorrentPagination" />
+        <div class="tf-dock-actions">
+          <v-btn v-if="section === 'preview' && state.canExecute" :color="recovering ? 'warning' : 'primary'"
+            variant="flat" :disabled="navigationBusy" @click="askConfirmation">{{ recovering ? '确认恢复' : '确认处理' }}</v-btn>
+          <v-btn v-else-if="section === 'preview' && state.result?.can_recover" color="primary" variant="tonal"
+            :disabled="navigationBusy || state.result.actual?.moving" @click="recoverResult">核对恢复预览</v-btn>
+          <v-btn v-else-if="section === 'preview' && state.result" color="primary" variant="tonal"
+            :disabled="navigationBusy" @click="navigate('history')">处理历史</v-btn>
+          <v-btn v-else-if="section !== 'select'" color="primary" :variant="nextSection ? 'text' : 'flat'"
+            :disabled="!canGenerate" :loading="state.loading.preview || state.loading.execute" @click="preview"
+            >{{ section === 'preview' && state.preview ? '重新生成' : '生成预览' }}</v-btn>
+          <v-btn v-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue"
+            :aria-label="nextLabel" :loading="section === 'select' && state.loading.detail" @click="nextStep">下一步</v-btn>
+        </div>
       </template>
     </template>
   </FormatterShell>
