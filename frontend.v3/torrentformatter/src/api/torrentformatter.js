@@ -97,6 +97,16 @@ export function createTorrentFormatterApi(client) {
       confirmed: true,
     })
   return {
+    async loadConfig(pluginId, signal) {
+      const value = await get(pluginId ? `plugin/${encodeURIComponent(pluginId)}` : prefix, {}, signal)
+      if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('全局配置响应无效')
+      return value
+    },
+    async saveConfig(pluginId, value) {
+      const path = pluginId ? `plugin/${encodeURIComponent(pluginId)}` : prefix
+      const response = await client.put(path, value, { feedback: 'silent' })
+      if (response?.success !== true) throw new Error(response?.message || '全局配置保存失败')
+    },
     async downloaders() {
       const items = await get('download/clients')
       if (!Array.isArray(items)) throw new Error('下载器列表响应无效')

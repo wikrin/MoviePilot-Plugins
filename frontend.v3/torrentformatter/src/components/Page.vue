@@ -7,19 +7,25 @@ import MediaSelector from './MediaSelector.vue'
 import RuleEditor from './RuleEditor.vue'
 import TorrentPreview from './TorrentPreview.vue'
 import HistoryPanel from './HistoryPanel.vue'
+import GlobalConfigPanel from './GlobalConfigPanel.vue'
+import { useGlobalConfig } from '../composables/useGlobalConfig.js'
 import { MOBILE_PAGE_SIZE, useTorrentFormatter } from '../composables/useTorrentFormatter.js'
 import { formatSize, shortHash } from '../api/torrentformatter.js'
 import { RESULT_COLORS, RESULT_LABELS } from '../utils/torrentTree.js'
 
+defineOptions({ inheritAttrs: false })
+
 const props = defineProps({
   api: { type: Object, required: true },
-  initialConfig: { type: Object, default: () => ({}) },
-  show_switch: { type: Boolean, default: true },
+  pluginId: { type: String, default: '' },
   plugin_id: { type: String, default: '' },
+  startSection: { type: String, default: '' },
 })
-const emit = defineEmits(['close', 'switch', 'save', 'layout'])
+const emit = defineEmits(['close', 'layout'])
+const instanceId = computed(() => props.pluginId || props.plugin_id)
 const state = reactive(useTorrentFormatter(() => props.api))
-const section = ref('select')
+const configEditor = reactive(useGlobalConfig(() => props.api, () => instanceId.value))
+const section = ref(props.startSection)
 const mobileLayout = ref(false)
 const confirmation = ref(false)
 const acknowledged = ref(false)
@@ -27,7 +33,7 @@ const confirmedPreview = ref(null)
 const deleteConfirmation = ref(false)
 const deleteAcknowledged = ref(false)
 const historyToDelete = ref([])
-const working = computed(() => state.loading.execute || state.loading.historyDelete || state.loading.historyLookup)
+const working = computed(() => configEditor.saving || state.loading.execute || state.loading.historyDelete || state.loading.historyLookup)
 const deleteAttempted = computed(() => state.historyDeleteResults.length > 0)
 watch([mobileLayout, () => state.pageSize, working], ([mobile, size, busy]) => {
   if (!mobile || size === MOBILE_PAGE_SIZE || busy) return
@@ -49,13 +55,24 @@ const canDeleteHistory = computed(
     !state.errors.historyDelete,
 )
 const snackbar = reactive({ show: false, text: '', color: 'success' })
-const sections = computed(() => [
-  { id: 'select', title: '选择种子', subtitle: '一个明确的处理目标', badge: state.selected ? '1' : '' },
-  { id: 'media', title: '媒体信息', subtitle: '自动识别或手动指定' },
-  { id: 'rules', title: '本次规则', subtitle: '不影响全局配置', badge: state.overrideCount || '' },
-  { id: 'preview', title: '变更预览', subtitle: '目录树与前后差异' },
-  { id: 'history', title: '处理历史', subtitle: '核对备份与恢复', number: '↺', badge: state.history.total || '' },
+const groups = computed(() => [
+  { id: 'config', title: '全局配置', icon: 'mdi-cog-outline', children: [
+    { id: 'automation', title: '工作方式', icon: 'mdi-calendar-clock-outline' },
+    { id: 'exclusions', title: '排除与保护', icon: 'mdi-shield-outline' },
+    { id: 'naming', title: '命名规则', icon: 'mdi-rename-outline' },
+  ] },
+  { id: 'workspace', title: '工作台', icon: 'mdi-view-dashboard-outline', children: [
+    { id: 'select', title: '选择种子', icon: 'mdi-format-list-bulleted' },
+    { id: 'media', title: '媒体信息', icon: 'mdi-movie-open-outline' },
+    { id: 'rules', title: '本次规则', icon: 'mdi-tune-variant', badge: state.overrideCount },
+    { id: 'preview', title: '变更预览', icon: 'mdi-file-tree-outline' },
+  ] },
+  { id: 'history', title: '处理历史', icon: 'mdi-history', badge: state.history.total },
 ])
+const activeGroup = computed(() => groups.value.find(item => item.id === section.value || item.children?.some(child => child.id === section.value)))
+const configuring = computed(() => activeGroup.value?.id === 'config')
+const configBusy = computed(() => configEditor.loading || configEditor.saving)
+const canSaveConfig = computed(() => configEditor.loaded && configEditor.changed.length > 0 && !configBusy.value && !state.loading.initial)
 const recovering = computed(() => state.previewMode === 'recover')
 const canContinue = computed(() =>
   Boolean(
@@ -70,8 +87,8 @@ const canContinue = computed(() =>
   ),
 )
 const previousSection = computed(() => ({ media: 'select', rules: 'media', preview: recovering.value ? 'history' : 'rules' })[section.value])
-const nextSection = computed(() => ({ select: 'media', media: 'rules', rules: 'preview' })[section.value])
-const nextLabel = computed(() => ({ select: '下一步：媒体信息', media: '下一步：本次规则', rules: '下一步：变更预览' })[section.value])
+const nextSection = computed(() => ({ select: 'media', media: 'rules' })[section.value])
+const nextLabel = computed(() => ({ select: '下一步：媒体信息', media: '下一步：本次规则' })[section.value])
 const navigationBusy = computed(() => working.value || state.loading.preview)
 const selectionStatus = computed(() =>
   state.loading.detail
@@ -173,12 +190,31 @@ async function recoverResult() {
     })
 }
 function navigate(value) {
-  if (working.value) return
+  if (navigationBusy.value) return
   if (recovering.value && ['select', 'media', 'rules'].includes(value)) state.invalidatePreview()
   section.value = value
   if (value === 'history') void state.enterHistory()
   else if (value === 'select') void state.ensureTorrentsFresh()
   else if (['media', 'rules'].includes(value)) void state.ensureSelectedTargetFresh()
+  else if (configuring.value && !configEditor.loaded) void configEditor.load()
+}
+function refresh() {
+  if (!section.value) return
+  if (configuring.value) {
+    void configEditor.load()
+    if (state.errors.initial) void state.initialize()
+  } else {
+    void state.refresh()
+  }
+}
+async function saveConfig() {
+  if (!canSaveConfig.value) return
+  const saved = await configEditor.save()
+  if (!saved) return
+  state.applySavedConfig(saved)
+  snackbar.text = '全局配置已保存'
+  snackbar.color = 'success'
+  snackbar.show = true
 }
 function askConfirmation() {
   if (!state.canExecute) return
@@ -239,42 +275,68 @@ function close() {
   state.stop()
   emit('close')
 }
-function switchConfig() {
-  state.invalidatePreview()
-  state.stop()
-  emit('switch')
-}
 watch(
-  () => [props.api, props.plugin_id],
-  () => {
-    state.resetWorkspace()
-    section.value = 'select'
-    confirmation.value = false
-    deleteConfirmation.value = false
-    historyToDelete.value = []
+  [() => props.api, instanceId],
+  async (_instance, previous, onCleanup) => {
+    let current = true
+    onCleanup(() => { current = false })
+    if (previous.length) {
+      state.resetWorkspace()
+      configEditor.reset()
+      section.value = props.startSection
+      confirmation.value = false
+      deleteConfirmation.value = false
+      historyToDelete.value = []
+    }
     void state.initialize()
+    if (section.value && !configuring.value) return
+    await configEditor.load()
+    if (!current || section.value) return
+    const { event_enabled, cron_enabled } = configEditor.config
+    section.value = configEditor.loaded && (event_enabled || cron_enabled) ? 'select' : 'automation'
   },
+  { immediate: true },
 )
 onMounted(() => {
   emit('layout', { maxWidth: '96rem' })
-  void state.initialize()
 })
 </script>
 
 <template>
   <FormatterShell
+    :key="instanceId"
     :section="section"
-    :sections="sections"
-    :busy="working"
-    workspace
-    :show-switch="show_switch"
+    :groups="groups"
+    :active-group="activeGroup?.id || ''"
+    :subtitle="activeGroup?.title || '读取配置'"
+    :busy="navigationBusy"
     @update:section="navigate"
     @update:mobile="mobileLayout = $event"
     @close="close"
-    @switch="switchConfig"
-    @refresh="state.refresh"
+    @refresh="refresh"
   >
     <template #default="{ mobile, scrollElement, paginationTarget }">
+    <v-progress-linear v-if="!section" indeterminate color="primary" class="mb-4" aria-label="正在读取全局配置" />
+    <template v-else-if="configuring">
+      <v-alert v-if="configEditor.error" type="error" variant="tonal" density="compact" class="tf-inline-alert">
+        {{ configEditor.error }}
+        <v-btn v-if="!configEditor.loaded" size="small" variant="text" @click="configEditor.load">重试</v-btn>
+      </v-alert>
+      <v-progress-linear v-if="configEditor.loading" indeterminate color="primary" class="mb-4" aria-label="正在读取全局配置" />
+      <v-alert v-if="section === 'automation' && state.errors.initial" type="error" variant="tonal" density="compact" class="tf-inline-alert">
+        {{ state.errors.initial }}<v-btn size="small" variant="text" @click="state.initialize">重试</v-btn>
+      </v-alert>
+      <GlobalConfigPanel
+        v-if="configEditor.loaded"
+        :section="section"
+        :config="configEditor.config"
+        :downloaders="state.downloaders"
+        :loading-downloaders="state.loading.initial"
+        :disabled="configBusy"
+        @save="saveConfig"
+      />
+    </template>
+    <template v-else>
     <v-alert v-if="state.errors.initial" type="error" variant="tonal" density="compact" class="tf-inline-alert"
       >{{ state.errors.initial }}<v-btn size="small" variant="text" @click="state.initialize">重试</v-btn></v-alert
     >
@@ -450,8 +512,31 @@ onMounted(() => {
       @verify-selected="state.verifyHistorySelection"
     />
     </template>
+    </template>
     <template #summary>
-      <div v-if="section === 'history'" class="tf-summary">
+      <div v-if="configuring" class="tf-summary">
+        <div class="tf-summary-heading"><h2>配置影响摘要</h2></div>
+        <template v-if="configEditor.loaded">
+          <div class="tf-stat-row"><span>事件自动处理</span><strong>{{ configEditor.config.event_enabled ? '启用' : '关闭' }}</strong></div>
+          <div class="tf-stat-row"><span>定时扫描</span><strong>{{ configEditor.config.cron_enabled ? '启用' : '关闭' }}</strong></div>
+          <div v-if="configEditor.config.cron_enabled" class="tf-summary-block">
+            <span class="tf-summary-label">下载器 / 周期</span>
+            <span class="tf-summary-name">{{ configEditor.config.downloader.join('、') || '尚未选择' }}</span>
+            <code class="tf-code-path mt-2">{{ configEditor.config.cron || '0 8 * * *' }}</code>
+          </div>
+          <div class="tf-summary-block">
+            <div class="tf-stat-row"><span>显示名重命名</span><strong>{{ configEditor.config.rename_torrent ? '启用' : '关闭' }}</strong></div>
+            <div class="tf-stat-row"><span>实验性文件改名</span><strong>{{ configEditor.config.rename_file ? '启用' : '关闭' }}</strong></div>
+            <p class="tf-summary-note">Transmission 不支持独立显示名及任意跨目录文件布局。</p>
+          </div>
+          <div class="tf-summary-block">
+            <span class="tf-summary-label">未保存的改动</span>
+            <strong class="tf-summary-name">{{ configEditor.changed.length }} 项</strong>
+          </div>
+          <v-btn :disabled="configBusy" variant="text" block class="mt-2" @click="configEditor.restoreDefaults">恢复默认值</v-btn>
+        </template>
+      </div>
+      <div v-else-if="section === 'history'" class="tf-summary">
         <div class="tf-summary-heading">
           <h2>历史核验摘要</h2>
           <span class="tf-source-badge">当前筛选</span>
@@ -499,7 +584,7 @@ onMounted(() => {
           >重新核验历史</v-btn
         >
       </div>
-      <div v-else class="tf-summary">
+      <div v-else-if="section" class="tf-summary">
         <div class="tf-summary-heading">
           <h2>{{ section === 'select' ? '当前处理目标' : recovering ? '本次恢复摘要' : '本次影响摘要' }}</h2>
           <span class="tf-source-badge">{{ section === 'select' ? '单种子' : recovering ? '恢复原状' : '单种子' }}</span>
@@ -593,6 +678,8 @@ onMounted(() => {
     </template>
     <template v-if="section !== 'history'" #summary-actions>
       <div class="tf-summary-action">
+        <v-btn v-if="configuring" block color="primary" variant="flat" :disabled="!canSaveConfig" :loading="configEditor.saving" @click="saveConfig">保存全局配置</v-btn>
+        <template v-else>
         <template v-if="section === 'preview' && state.result">
           <v-btn v-if="state.result.can_recover" block color="primary" variant="tonal"
             :disabled="navigationBusy || state.result.actual?.moving" @click="recoverResult">核对恢复预览</v-btn>
@@ -603,9 +690,9 @@ onMounted(() => {
           <v-btn v-if="section === 'preview' && state.canExecute" block
             :color="recovering ? 'warning' : 'primary'" variant="flat" :disabled="navigationBusy"
             @click="askConfirmation">{{ recovering ? '确认恢复此种子' : '确认处理此种子' }}</v-btn>
-          <v-btn v-else block color="primary" variant="flat" :disabled="!canGenerate"
+          <v-btn v-else-if="section !== 'rules'" block color="primary" variant="flat" :disabled="!canGenerate"
             :loading="state.loading.preview || state.loading.execute" @click="preview"
-            >{{ section === 'rules' ? '生成变更预览' : state.preview ? '重新生成预览' : '生成只读预览' }}</v-btn>
+            >{{ state.preview ? '重新生成预览' : '生成只读预览' }}</v-btn>
           <v-btn v-if="state.detail?.processed && !recovering" block color="warning" variant="text" class="mt-2"
             :disabled="navigationBusy" @click="navigate('history')">先恢复已处理种子</v-btn>
           <v-btn v-else-if="section === 'preview' && state.canExecute" block variant="text" size="small" class="mt-2"
@@ -613,13 +700,20 @@ onMounted(() => {
         </template>
         <div class="tf-step-navigation">
           <v-btn v-if="previousSection" variant="text" size="small" :disabled="navigationBusy" @click="previousStep">上一步</v-btn>
-          <v-btn v-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue" :aria-label="nextLabel"
+          <v-btn v-if="section === 'rules'" color="primary" variant="tonal" :disabled="!canGenerate"
+            :loading="state.loading.preview || state.loading.execute" @click="preview">生成变更预览</v-btn>
+          <v-btn v-else-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue" :aria-label="nextLabel"
             :loading="section === 'select' && state.loading.detail" @click="nextStep">{{ section === 'select' ? nextLabel : '下一步' }}</v-btn>
         </div>
+        </template>
       </div>
     </template>
     <template #actions="{ mobile }">
-      <template v-if="section === 'history'"
+      <template v-if="configuring">
+        <span>{{ configEditor.changed.length ? `${configEditor.changed.length} 项尚未保存` : '没有未保存改动' }}</span>
+        <v-btn color="primary" variant="flat" :disabled="!canSaveConfig" :loading="configEditor.saving" @click="saveConfig">保存配置</v-btn>
+      </template>
+      <template v-else-if="section === 'history'"
         ><span>{{ state.history.total }} 条匹配记录</span
         ><v-btn
           color="primary"
@@ -641,10 +735,12 @@ onMounted(() => {
             :disabled="navigationBusy || state.result.actual?.moving" @click="recoverResult">核对恢复预览</v-btn>
           <v-btn v-else-if="section === 'preview' && state.result" color="primary" variant="tonal"
             :disabled="navigationBusy" @click="navigate('history')">处理历史</v-btn>
-          <v-btn v-else-if="section !== 'select'" color="primary" :variant="nextSection ? 'text' : 'flat'"
+          <v-btn v-else-if="section !== 'select' && section !== 'rules'" color="primary" :variant="nextSection ? 'text' : 'flat'"
             :disabled="!canGenerate" :loading="state.loading.preview || state.loading.execute" @click="preview"
             >{{ section === 'preview' && state.preview ? '重新生成' : '生成预览' }}</v-btn>
-          <v-btn v-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue"
+          <v-btn v-if="section === 'rules'" color="primary" variant="tonal" :disabled="!canGenerate"
+            :loading="state.loading.preview || state.loading.execute" @click="preview">生成变更预览</v-btn>
+          <v-btn v-else-if="nextSection" color="primary" variant="tonal" :disabled="!canContinue"
             :aria-label="nextLabel" :loading="section === 'select' && state.loading.detail" @click="nextStep">下一步</v-btn>
         </div>
       </template>

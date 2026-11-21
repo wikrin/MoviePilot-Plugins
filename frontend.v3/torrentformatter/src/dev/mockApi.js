@@ -626,6 +626,7 @@ export function createMockApi() {
             .filter(item => !params.title || `${item.title} ${item.media_id} ${item.overview}`.includes(params.title))
             .map(item => ({ ...item, poster_path: item.poster })),
         }
+      if (url.pathname === '/plugin/TorrentFormatter') return clone(settings)
       const endpoint = url.pathname.split('/').at(-1)
       if (endpoint === 'rules')
         return {
@@ -719,6 +720,15 @@ export function createMockApi() {
         return clone(operation.result)
       }
       throw apiError(`演示 GET 不支持 ${path}`, 404)
+    },
+    async put(path, payload) {
+      if (path !== 'plugin/TorrentFormatter') throw apiError('不支持的演示配置路径', 404)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      if (payload.cron_enabled && payload.cron && !/^[\d\w*,/-]+(?:\s+[\d\w*,/-]+){4}$/.test(payload.cron.trim()))
+        throw apiError('定时任务 Cron 表达式无效', 422)
+      settings = clone({ ...settings, ...payload })
+      tickets.clear()
+      return { success: true, message: '演示配置已保存到内存' }
     },
     async post(path, payload) {
       await new Promise(resolve => setTimeout(resolve, 200))

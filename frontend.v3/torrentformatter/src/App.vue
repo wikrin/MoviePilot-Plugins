@@ -7,17 +7,17 @@ import { createMockApi } from './dev/mockApi.js'
 import { loadFederatedView } from './dev/loadFederation.js'
 
 const remoteEntry = new URLSearchParams(window.location.search).get('remote')
-const pageComponent = remoteEntry ? defineAsyncComponent(() => loadFederatedView(remoteEntry, 'Page')) : Page
-const configComponent = remoteEntry ? defineAsyncComponent(() => loadFederatedView(remoteEntry, 'Config')) : Config
+const startView = new URLSearchParams(window.location.search).get('view') === 'config' ? 'Config' : 'Page'
+const pageComponent = remoteEntry
+  ? defineAsyncComponent(() => loadFederatedView(remoteEntry, startView))
+  : startView === 'Config' ? Config : Page
 
 const api = shallowRef(createMockApi())
-const config = ref(api.value.getConfig())
 const mode = ref('page')
 const themeName = ref('light')
 const scenario = ref('normal')
 const version = ref(0)
 const theme = useTheme()
-const notice = ref('')
 const themeOptions = [
   { title: '浅色', value: 'light' },
   { title: '深色', value: 'dark' },
@@ -54,15 +54,8 @@ watch(scenario, value => {
 function reset() {
   api.value = createMockApi()
   api.value.setScenario(scenario.value)
-  config.value = api.value.getConfig()
   version.value++
   mode.value = 'page'
-  notice.value = ''
-}
-function save(value) {
-  api.value.setConfig(value)
-  config.value = value
-  notice.value = '演示配置已保存到内存，单次临时规则不会修改它。'
 }
 </script>
 
@@ -92,16 +85,6 @@ function save(value) {
             /><v-btn variant="tonal" size="small" @click="reset">重置示例</v-btn>
           </div>
         </div>
-        <v-alert
-          v-if="notice"
-          type="success"
-          variant="tonal"
-          density="compact"
-          class="mb-3"
-          closable
-          @click:close="notice = ''"
-          >{{ notice }}</v-alert
-        >
         <v-card class="tf-demo-surface" elevation="0">
           <component
             :is="pageComponent"
@@ -109,16 +92,6 @@ function save(value) {
             :key="version"
             :api="api"
             @close="mode = 'closed'"
-            @switch="mode = 'config'"
-          />
-          <component
-            :is="configComponent"
-            v-else-if="mode === 'config'"
-            :api="api"
-            :initial-config="config"
-            @close="mode = 'closed'"
-            @switch="mode = 'page'"
-            @save="save"
           />
           <div v-else class="tf-demo-closed">
             <h2>演示工作台已关闭</h2>

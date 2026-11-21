@@ -1,28 +1,49 @@
 <script setup>
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import '../styles/formatter.css'
 
-defineProps({
+const props = defineProps({
   title: { type: String, default: '种子格式化' },
   subtitle: { type: String, default: '工作台' },
-  badge: { type: String, default: 'PREVIEW FIRST' },
   section: { type: String, default: '' },
-  sections: { type: Array, default: () => [] },
+  groups: { type: Array, default: () => [] },
+  activeGroup: { type: String, default: 'workspace' },
   busy: Boolean,
-  workspace: Boolean,
-  showSwitch: { type: Boolean, default: true },
 })
-const emit = defineEmits(['update:section', 'update:mobile', 'close', 'switch', 'refresh'])
+const emit = defineEmits(['update:section', 'update:mobile', 'close', 'refresh'])
+const expandedGroups = ref([props.activeGroup])
+const lastSections = new Map()
+watch(() => props.section, value => {
+  lastSections.set(props.activeGroup, value)
+  if (!expandedGroups.value.includes(props.activeGroup)) expandedGroups.value.push(props.activeGroup)
+}, { immediate: true })
+function isExpanded(item) {
+  return expandedGroups.value.includes(item.id) && (!compactNav.value || props.activeGroup === item.id)
+}
+function selectGroup(item) {
+  if (props.busy) return
+  if (!item.children?.length) return emit('update:section', item.id)
+  if (item.id === props.activeGroup) {
+    expandedGroups.value = expandedGroups.value.includes(item.id)
+      ? expandedGroups.value.filter(id => id !== item.id)
+      : [...expandedGroups.value, item.id]
+  } else {
+    if (!expandedGroups.value.includes(item.id)) expandedGroups.value.push(item.id)
+    emit('update:section', lastSections.get(item.id) || item.children[0].id)
+  }
+}
 const root = ref(null)
 const layout = ref(null)
 const paginationHost = ref(null)
 const mobile = ref(false)
+const compactNav = ref(false)
 const availableHeight = ref('90dvh')
 let observer
 let measureFrame
 function measureHeight() {
   if (root.value) {
     availableHeight.value = `${Math.max(320, window.innerHeight - Math.max(0, root.value.getBoundingClientRect().top) - 12)}px`
+    compactNav.value = root.value.getBoundingClientRect().width < 1100
     const isMobile = root.value.getBoundingClientRect().width < 720
     if (mobile.value !== isMobile) {
       mobile.value = isMobile
@@ -51,7 +72,7 @@ onUnmounted(() => {
 
 <template>
   <section ref="root" class="tf-shell" :style="{ '--tf-available-height': availableHeight }">
-    <div class="tf-frame" :class="{ 'tf-frame--history': section === 'history', 'tf-frame--workspace': workspace && section !== 'history', 'tf-frame--selection': workspace && section === 'select' }">
+    <div class="tf-frame tf-frame--unified" :class="{ 'tf-frame--history': section === 'history', 'tf-frame--workspace': section !== 'history', 'tf-frame--selection': section === 'select' }">
       <header class="tf-header">
         <div class="tf-brand">
           <div class="tf-brand-mark" aria-hidden="true">
@@ -70,32 +91,11 @@ onUnmounted(() => {
             <div class="tf-crumb">MoviePilot <span>/</span> 插件 <span>/</span> {{ subtitle }}</div>
             <div class="tf-title-line">
               <h1>{{ title }}</h1>
-              <span class="tf-brand-badge">{{ badge }}</span>
             </div>
           </div>
         </div>
         <div class="tf-header-actions">
           <slot name="header-actions" />
-          <v-btn
-            v-if="showSwitch"
-            class="tf-switch-button"
-            variant="text"
-            size="small"
-            :disabled="busy"
-            @click="emit('switch')"
-            >{{ subtitle === '全局配置' ? '打开工作台' : '全局配置' }}</v-btn
-          >
-          <v-btn
-            v-if="showSwitch"
-            class="tf-switch-icon"
-            variant="text"
-            size="small"
-            icon
-            :disabled="busy"
-            :aria-label="subtitle === '全局配置' ? '打开单种子工作台' : '打开全局配置'"
-            @click="emit('switch')"
-            ><v-icon :icon="subtitle === '全局配置' ? 'mdi-file-tree-outline' : 'mdi-cog-outline'"
-          /></v-btn>
           <v-btn
             class="tf-refresh-button"
             variant="tonal"
@@ -111,7 +111,7 @@ onUnmounted(() => {
             size="small"
             icon
             :disabled="busy"
-            aria-label="刷新工作台"
+            aria-label="刷新当前页面"
             @click="emit('refresh')"
             ><v-icon icon="mdi-refresh"
           /></v-btn>
@@ -121,25 +121,36 @@ onUnmounted(() => {
         </div>
       </header>
       <div ref="layout" class="tf-layout">
-        <nav class="tf-nav" aria-label="工作台分组">
-          <div class="tf-nav-caption">{{ subtitle === '全局配置' ? '插件设置' : '处理流程' }}</div>
-          <button
-            v-for="(item, index) in sections"
-            :key="item.id"
-            type="button"
-            class="tf-nav-item"
-            :class="{ 'tf-nav-item--active': section === item.id, 'tf-nav-item--separate': item.id === 'history' }"
-            :disabled="busy"
-            :aria-current="section === item.id ? 'step' : undefined"
-            @click="emit('update:section', item.id)"
-          >
-            <span class="tf-nav-number">{{ item.number || String(index + 1).padStart(2, '0') }}</span>
-            <span class="tf-nav-copy"
-              ><strong>{{ item.title }}</strong
-              ><small>{{ item.subtitle }}</small></span
-            >
-            <span v-if="item.badge" class="tf-nav-count">{{ item.badge }}</span>
-          </button>
+        <nav class="tf-nav tf-nav--tree" aria-label="种子格式化导航">
+          <div class="tf-nav-groups">
+            <div v-for="item in groups" :key="item.id" class="tf-nav-group"
+              :class="{ 'tf-nav-group--active': activeGroup === item.id }">
+              <button type="button" class="tf-nav-item tf-nav-parent"
+                :class="{ 'tf-nav-item--active': section === item.id }"
+                :disabled="busy"
+                :aria-current="section === item.id ? 'page' : undefined"
+                :aria-expanded="item.children ? isExpanded(item) : undefined"
+                :aria-controls="item.children ? `tf-nav-${item.id}` : undefined"
+                @click="selectGroup(item)">
+                <v-icon :icon="item.icon" size="19" aria-hidden="true" />
+                <span class="tf-nav-copy"><strong>{{ item.title }}</strong></span>
+                <span v-if="item.badge" class="tf-nav-count">{{ item.badge }}</span>
+                <v-icon v-if="item.children" class="tf-nav-chevron"
+                  :icon="isExpanded(item) ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                  size="16" aria-hidden="true" />
+              </button>
+              <div v-if="item.children" v-show="isExpanded(item)" :id="`tf-nav-${item.id}`" class="tf-nav-children">
+                <button v-for="child in item.children" :key="child.id" type="button"
+                  class="tf-nav-item tf-nav-child" :class="{ 'tf-nav-item--active': section === child.id }"
+                  :disabled="busy" :aria-current="section === child.id ? 'page' : undefined"
+                  @click="emit('update:section', child.id)">
+                  <v-icon :icon="child.icon" size="17" aria-hidden="true" />
+                  <span class="tf-nav-copy"><strong>{{ child.title }}</strong></span>
+                  <span v-if="child.badge" class="tf-nav-count">{{ child.badge }}</span>
+                </button>
+              </div>
+            </div>
+          </div>
           <div class="tf-nav-note">
             <v-icon icon="mdi-shield-check-outline" size="18" /><strong>先预览，再执行</strong>
             <p>操作原始下载目录。请核对媒体与每一项差异，处理记录可用于恢复。</p>

@@ -2152,6 +2152,137 @@
   }
 }
 
+.tf-nav--tree {
+  overflow-x: visible;
+}
+
+.tf-nav-groups {
+  min-inline-size: 0;
+}
+
+.tf-nav-group + .tf-nav-group {
+  margin-block-start: 6px;
+}
+
+.tf-nav--tree .tf-nav-item {
+  inline-size: 100%;
+  gap: 10px;
+  padding: 11px 10px;
+  border-color: transparent;
+  border-radius: 7px;
+  background: transparent;
+}
+
+.tf-nav--tree .tf-nav-item:hover:not(.tf-nav-item--active) {
+  background: rgba(var(--v-theme-on-surface), 0.04);
+}
+
+.tf-nav-group--active > .tf-nav-parent {
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.tf-nav--tree .tf-nav-item--active {
+  color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.075);
+}
+
+.tf-nav-chevron,
+.tf-nav--tree .tf-nav-count {
+  margin-inline-start: auto;
+}
+
+.tf-nav-children {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 2px 0 8px 19px;
+  padding-inline-start: 9px;
+  border-inline-start: 1px solid rgba(var(--v-theme-on-surface), 0.16);
+}
+
+.tf-nav-child .tf-nav-copy strong {
+  font-weight: 400;
+}
+
+@container (width < 1100px) {
+  .tf-frame--unified .tf-nav--tree {
+    display: block;
+    padding: 0;
+    border: 0;
+  }
+
+  .tf-nav-groups {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 4px;
+  }
+
+  .tf-nav-group {
+    display: contents;
+  }
+
+  .tf-nav--tree .tf-nav-parent {
+    grid-row: 1;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 4px;
+  }
+
+  .tf-nav-group--active > .tf-nav-parent {
+    color: rgb(var(--v-theme-primary));
+    background: rgba(var(--v-theme-primary), 0.075);
+  }
+
+  .tf-nav-parent .tf-nav-count {
+    display: none;
+  }
+
+  .tf-nav-parent .tf-nav-chevron {
+    margin-inline-start: 0;
+    flex-shrink: 0;
+  }
+
+  .tf-nav-children {
+    grid-row: 2;
+    grid-column: 1 / -1;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin: 0;
+    padding: 8px 0 0;
+    gap: 4px;
+    border-inline-start: 0;
+    border-block-start: var(--tf-border);
+  }
+
+  .tf-nav--tree .tf-nav-child {
+    flex: 1 1 auto;
+    inline-size: auto;
+    justify-content: center;
+    gap: 5px;
+    padding: 8px 6px;
+  }
+
+  .tf-nav-child .tf-nav-count {
+    margin-inline-start: 0;
+  }
+
+  .tf-frame--unified .tf-nav-note {
+    display: none;
+  }
+}
+
+@container (width >= 1100px) {
+  .tf-frame--unified .tf-layout {
+    grid-template-columns: 184px minmax(0, 1fr) 262px;
+  }
+
+  .tf-frame--unified .tf-nav--tree {
+    min-block-size: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+  }
+}
+
 @container (width >=640px) {
   .tf-scalar-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);

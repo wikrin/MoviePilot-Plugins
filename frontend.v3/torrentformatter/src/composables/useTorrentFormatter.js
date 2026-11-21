@@ -472,6 +472,16 @@ export function useTorrentFormatter(
     await refreshHistory()
   }
 
+  function applySavedConfig(config) {
+    const previous = overrides.value
+    const effective = Object.fromEntries(Object.keys(DEFAULT_RULES).map(key => [key, config[key]]))
+    invalidatePreview()
+    silenceInvalidate = true
+    rulesInfo.value = { ...rulesInfo.value, effective, exclude_dirs: config.exclude_dirs, exclude_tags: config.exclude_tags }
+    draftRules.value = { ...effective, ...previous }
+    silenceInvalidate = false
+  }
+
   async function loadTorrents() {
     if (!selectedDownloader.value || disposed) return
     const id = ++listId
@@ -1279,6 +1289,7 @@ export function useTorrentFormatter(
     selected,
     detail,
     rulesInfo,
+    applySavedConfig,
     draftRules,
     manualMedia,
     season,
