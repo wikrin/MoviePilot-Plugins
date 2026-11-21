@@ -125,6 +125,12 @@ case "$run_mode" in
     echo "🏗️ Building: $plugin_name"
     yarn build --config "vite.config.js" || { echo "❌ Build failed"; exit 1; }
 
+    # 新联邦运行时分块不遵循 OriginJS 前缀，必须完整保留 assets。
+    preserve_federation_assets=false
+    if node -e 'const p = require("./package.json"); process.exit(p.dependencies?.["@module-federation/vite"] || p.devDependencies?.["@module-federation/vite"] ? 0 : 1)'; then
+      preserve_federation_assets=true
+    fi
+
     target_dir="$ROOT_DIR/$backend_dir/$plugin_name"
     mkdir -p "$target_dir"
 
@@ -159,6 +165,10 @@ case "$run_mode" in
     # 判断是否在白名单中
     function is_kept_file() {
       local file="$1"
+      local relative_path="$2"
+      if [[ "$preserve_federation_assets" == true && "$relative_path" == assets/* ]]; then
+        return 0
+      fi
       for pattern in "${keep_patterns[@]}"; do
         if [[ "$file" == $pattern ]]; then
           return 0
@@ -182,7 +192,7 @@ case "$run_mode" in
     find . -type f | while read -r file; do
       filename=$(basename "$file")
       relpath="${file:2}"  # 去掉 "./"
-      if ! is_kept_file "$filename"; then
+      if ! is_kept_file "$filename" "$relpath"; then
         echo "🗑️ Removing file: $relpath"
         rm -f "$relpath"
       fi
