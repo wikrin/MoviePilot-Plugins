@@ -6,8 +6,8 @@ export async function loadFederatedView(entry, name) {
   if (!remotes.has(entry)) {
     remotes.set(
       entry,
-      import(/* @vite-ignore */ entry).then(remote => {
-        remote.init({
+      import(/* @vite-ignore */ entry).then(async remote => {
+        await remote.init({
           vue: {
             [Vue.version]: {
               get: () => Promise.resolve(() => Vue),
@@ -23,6 +23,6 @@ export async function loadFederatedView(entry, name) {
   }
   const remote = await remotes.get(entry)
   const factory = await remote.get(`./${name}`)
-  const module = factory()
+  const module = await factory()
   return module.default || module
 }

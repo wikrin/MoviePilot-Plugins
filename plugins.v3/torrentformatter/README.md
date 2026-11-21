@@ -10,6 +10,14 @@
 
 本地演示默认使用 Page 入口，可通过 `?view=config` 检查 Config 入口。
 
+## 前端构建
+
+模块联邦使用 `@module-federation/vite`，导出 `./Config` 和 `./Page`，发布入口保持为 `dist/assets/remoteEntry.js`。Vue、Vuetify 及其样式由宿主共享，Vue 使用单例，避免插件与宿主使用不同的 Vue 实例。
+
+在仓库根目录运行 `bash finalize-dist.sh build frontend.v3/torrentformatter`，构建结果会发布到 `plugins.v3/torrentformatter/dist`。新运行时需要完整的 `assets` 目录，不能再按 OriginJS 的 `__federation_*` 文件名前缀裁剪资源。
+
+独立开发壳支持 `?remote=<remoteEntry URL>` 加载构建产物，可结合 `&view=config` 验证 Config 入口；默认验证 Page 入口。
+
 选择一个下载器中的种子，核对媒体信息和本次规则，通过目录树/差异清单预览后明确确认执行。手动工作台不依赖事件或定时任务开关。
 
 ## 使用流程
