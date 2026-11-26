@@ -1236,14 +1236,17 @@ class MetaCorrectionUseCase:
         """
         执行元数据修正用例并返回范围决策结果
         """
-        release_info = self._build_release_info(
-            meta=meta,
-            tmdb_mapping=tmdb_mapping,
-            publish_date=publish_date,
+        release_info = ReleaseInfo(
+            title=meta.title,
+            year=int(meta.year) if meta.year else None,
+            parsed_range=EpisodeRange.from_meta_fields(
+                seasons=meta.season_list,
+                episodes=meta.episode_list,
+            ),
+            publish_date=self._normalize_publish_date(publish_date),
             source=source,
+            tmdb_mapping=self._normalize_mapping(tmdb_mapping),
         )
-        if release_info is None:
-            raise ValueError("缺少可用的季集范围信息")
 
         season_episodes = {season: episodes for season, episodes in mediainfo.seasons.items() if season > 0}
         existing_points = [
@@ -1439,31 +1442,6 @@ class MetaCorrectionUseCase:
             episode_group=episode_group,
         )
 
-    def _build_release_info(
-        self,
-        *,
-        meta: MetaBase,
-        tmdb_mapping: dict[tuple[int, int], tuple[int, int]],
-        publish_date: date | datetime | str | None,
-        source: str | None,
-    ) -> ReleaseInfo | None:
-        """构建决策所需的发布信息对象"""
-        episode_range = EpisodeRange.from_meta_fields(
-            seasons=meta.season_list,
-            episodes=meta.episode_list,
-        )
-        if episode_range is None:
-            return None
-
-        return ReleaseInfo(
-            title=meta.title,
-            year=int(meta.year) if meta.year else None,
-            parsed_range=episode_range,
-            publish_date=self._normalize_publish_date(publish_date),
-            source=source,
-            tmdb_mapping=self._normalize_mapping(tmdb_mapping),
-        )
-
     @staticmethod
     def _normalize_mapping(
         tmdb_mapping: dict[tuple[int, int], tuple[int, int]],
@@ -1527,6 +1505,9 @@ class MetaCorrectionUseCase:
 
         if mediainfo.next_episode_to_air.get("episode_type") in finale_type:
             return True
+
+        if mediainfo.number_of_seasons is None:
+            return False
 
         from app.chain.tmdb import TmdbChain
 
