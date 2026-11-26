@@ -18,7 +18,7 @@ import requests
 from anyio import CancelScope
 from app.sdk.config import settings
 from app.sdk.logging import logger
-from app.sdk.network import AsyncRequestUtils
+from app.sdk.network import AsyncRequestUtils, UrlUtils
 
 
 class ServiceError(RuntimeError):
@@ -418,6 +418,36 @@ class ServiceController:
         result = subprocess.run([str(path), "-v"], capture_output=True, text=True, timeout=5, check=True)
         return result.stdout.strip()
 
+    @staticmethod
+    def _release_urls(url: str) -> list[str]:
+        """
+        生成二进制下载地址候选，核心配置 GitHub 代理时优先走代理再回退原地址。
+
+        :param url: GitHub Release 原始下载地址
+        :return: 按优先级排列的下载地址列表
+        """
+        proxy = str(getattr(settings, "GITHUB_PROXY", "") or "").strip()
+        return [f"{UrlUtils.standardize_base_url(proxy)}{url}", url] if proxy else [url]
+
+    def _fetch_binary(self, url: str, dest):
+        """
+        按单个候选地址流式下载二进制并写入已打开的文件句柄。
+
+        :param url: 下载地址
+        :param dest: 临时文件句柄
+        :raises ServiceError: 下载被取消或文件超过大小限制
+        """
+        with requests.get(url, proxies=settings.PROXY, timeout=(10, 8), stream=True) as response:
+            response.raise_for_status()
+            size = 0
+            for chunk in response.iter_content(65536):
+                if self.event.is_set():
+                    raise ServiceError("下载已取消")
+                size += len(chunk)
+                if size > 256 * 1024 * 1024:
+                    raise ServiceError("下载文件超过大小限制")
+                dest.write(chunk)
+
     def download(self):
         system, arch = platform.system().lower(), platform.machine().lower()
         arch = {
@@ -431,20 +461,27 @@ class ServiceController:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.state, self.error = "downloading", ""
         url = f"https://github.com/wikrin/{self.name}/releases/download/v{self.version}/{self.name}-{system}-{arch}"
-        # 同目录临时文件 + 原子替换，下载失败保留原二进制。
-        fd, temporary = tempfile.mkstemp(dir=self.directory, prefix=".binary-")
+        # 同目录临时文件 + 原子替换，下载失败保留原二进制；逐候选地址清理半成品。
+        temporary = ""
+        last_error: Exception | None = None
         try:
-            with os.fdopen(fd, "wb") as dest:  # noqa: SIM117 -- 文件句柄先于网络请求打开，异常时仍关闭
-                with requests.get(url, proxies=settings.PROXY, timeout=(10, 8), stream=True) as response:
-                    response.raise_for_status()
-                    size = 0
-                    for chunk in response.iter_content(65536):
-                        if self.event.is_set():
-                            raise ServiceError("下载已取消")
-                        size += len(chunk)
-                        if size > 256 * 1024 * 1024:
-                            raise ServiceError("下载文件超过大小限制")
-                        dest.write(chunk)
+            for candidate in self._release_urls(url):
+                fd, temporary = tempfile.mkstemp(dir=self.directory, prefix=".binary-")
+                try:
+                    with os.fdopen(fd, "wb") as dest:  # noqa: SIM117 -- 文件句柄先于网络请求打开，异常时仍关闭
+                        self._fetch_binary(candidate, dest)
+                except ServiceError:
+                    Path(temporary).unlink(missing_ok=True)
+                    raise
+                except Exception as error:  # noqa: BLE001 -- 单个来源失败时换下一个候选地址重试
+                    Path(temporary).unlink(missing_ok=True)
+                    temporary = ""
+                    last_error = error
+                    self.log("warn", f"二进制来源下载失败，尝试下一个地址：{error}")
+                    continue
+                break
+            else:
+                raise ServiceError(f"二进制下载失败：{last_error}")
             path = Path(temporary)
             path.chmod(0o755)
             version = self.read_version(path)
@@ -454,7 +491,21 @@ class ServiceController:
             self.installed_version = version
             self.log("info", f"二进制已安装，版本 {version}")
         finally:
-            Path(temporary).unlink(missing_ok=True)
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
+
+    @staticmethod
+    def _base_url(address) -> str:
+        """
+        归一化核心设置的上游地址，兼容纯域名与带协议的完整 URL。
+
+        :param address: 核心设置值，可为空、域名或 URL
+        :return: 带协议且不含末尾斜线的地址；空值返回空字符串
+        """
+        value = str(address or "").strip().rstrip("/")
+        if not value:
+            return ""
+        return value if "://" in value else f"https://{value}"
 
     def _arguments(self):
         cfg = self.config
@@ -468,8 +519,11 @@ class ServiceController:
             "--data-dir",
             str(self.directory),
         ]
-        if settings.BANGUMI_PROXY_ENABLE and settings.BANGUMI_API_DOMAIN:
-            args.extend(["--bangumi-api-url", settings.BANGUMI_API_DOMAIN])
+        bangumi_url = (
+            self._base_url(settings.BANGUMI_API_DOMAIN) if settings.BANGUMI_PROXY_ENABLE else ""
+        )
+        if bangumi_url:
+            args.extend(["--bangumi-api-url", bangumi_url])
         if cfg.tvdb_api_url:
             args.extend(["--tvdb-api-url", cfg.tvdb_api_url])
         if cfg.bangumi_use_proxy:
@@ -478,8 +532,9 @@ class ServiceController:
             args.extend(["--cure-source", cfg.source])
         if settings.PROXY_HOST:
             args.extend(["--proxy", settings.PROXY_HOST])
-        if settings.TMDB_API_DOMAIN:
-            args.extend(["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"])
+        tmdb_url = self._base_url(settings.TMDB_API_DOMAIN)
+        if tmdb_url:
+            args.extend(["--tmdb-api-url", tmdb_url])
         return args
 
     def upstream_options(self):
