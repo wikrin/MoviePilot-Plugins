@@ -1,56 +1,24 @@
-import os
-import re
+from __future__ import annotations
+
+import secrets
 import threading
-from pathlib import Path
+import time
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from app.schemas.history import DownloadHistory
-from app.sdk.cache import cached
 from app.sdk.config import settings
 from app.sdk.logging import logger
-from app.sdk.media import MediaInfo, MetaBase
-from app.sdk.network import RequestUtils
 from app.sdk.plugin.base import _PluginBase
-from app.sdk.utilities import SystemUtils
+from app.sdk.scheduler import add_plugin_once_job, list_scheduler_jobs
 
-from .engine import MetaCorrectionUseCase
+from .api import PluginAPI
+from .config import CureTMDbAnimeConfig
+from .correction import CorrectionService
+from .data import query_plugin_data
+from .history import HistoryStore
+from .management import ManagementClient
+from .monitor import UpstreamMonitor
 from .patch import MonkeyPatchManager
-
-
-class CureTMDbAnimeConfig(BaseModel):
-    """
-    CureTMDbAnime 插件配置。
-
-    """
-
-    model_config = ConfigDict(extra="ignore")
-    # 启用插件
-    enabled: bool = Field(default=False)
-    # Bangumi API 地址
-    bangumi_api_url: str = Field(
-        default="https://api.bgm.tv",
-    )
-    # TVDB API 地址
-    tvdb_api_url: str = Field(
-        default="https://api4.thetvdb.com/v4",
-    )
-    # Bangumi API 是否使用代理
-    bangumi_use_proxy: bool = Field(default=True)
-    # 启用元数据修正
-    enable_correction: bool = Field(default=True)
-    # 当标题默认解析为 S01 时，按发布时间匹配 TMDB 季播出窗口推断季号
-    assume_season_by_window: bool = Field(default=False)
-    # 逐集播出间隔超过该阈值时切分制作周期
-    production_cycle_gap_days: int = Field(default=70, ge=20, le=365)
-    # 最新季允许的越界宽限集数
-    grace_episodes: int = Field(default=2, ge=0, le=5)
-    # 远程数据源地址
-    source: str | None = Field(
-        default="https://raw.githubusercontent.com/wikrin/CureTMDb/main/tv.json",
-    )
-    # 运行端口
-    port: int = Field(default=8632, ge=1024, le=65535)
+from .runtime import ServiceController, ServiceError
 
 
 class CureTMDbAnime(_PluginBase):
@@ -72,589 +40,341 @@ class CureTMDbAnime(_PluginBase):
     plugin_order = 99
     # 可使用的用户级别
     auth_level = 1
-    # 二进制文件
+    # 可执行文件
     binary_name = "curetmdbanime"
-    # 二进制文件版本
-    binary_version = "1.4.0"
+    # 可执行文件版本
+    binary_version = "1.5.0"
 
     def __init__(self):
+        """
+        装配稳定组件和生命周期锁，不启动服务或后台任务。
+        """
         super().__init__()
         self.config = CureTMDbAnimeConfig()
         self.patch_manager = MonkeyPatchManager()
-        self._thread: threading.Thread | None = None
-        self._event: threading.Event = threading.Event()
-
-    def init_plugin(self, config: dict = None):
-        # 停止现有任务
-        self.stop_service()
-        # 加载插件配置
-        self.load_config(config)
-
-        if not self.config.enabled:
-            return
-
-        # 初始化
-        self.meta_correction_use_case = MetaCorrectionUseCase(
-            grace_episodes=self.config.grace_episodes,
-            assume_season_by_window=self.config.assume_season_by_window,
-            production_cycle_gap_days=self.config.production_cycle_gap_days,
+        self._patch_lock = threading.RLock()
+        self._history_close_lock = threading.RLock()
+        # 保留既有本地二进制数据目录；实例通过类名隔离。
+        self.runtime = ServiceController(
+            settings.PLUGIN_DATA_PATH / self.__class__.__name__.lower(),
+            self.binary_name,
+            self.binary_version,
+            self._connected,
+            self._disconnected,
+        )
+        self.history = None
+        self._history_generation = 0
+        self._history_closed = True
+        self._history_drained = True
+        self._scheduler_checked_at = float("-inf")
+        self._active_address = None
+        self.management = ManagementClient(self.runtime, self._management_token)
+        self.correction = CorrectionService(
+            runtime=self.runtime,
+            patch_manager=self.patch_manager,
+            chain=self.chain,
+            config_provider=lambda: self.config,
+            history_provider=lambda: self.history,
+        )
+        self.monitor = UpstreamMonitor(
+            runtime=self.runtime,
+            management=self.management,
+            storage=self,
+            config_provider=lambda: self.config,
+        )
+        self.api = PluginAPI(
+            runtime=self.runtime,
+            patch_manager=self.patch_manager,
+            management=self.management,
+            monitor=self.monitor,
+            config_provider=lambda: self.config,
+            history_provider=lambda: self.history,
         )
 
-        # 在单独线程中运行 CureTMDbAnime 服务
-        self._thread = threading.Thread(target=self._run_binary_in_thread, daemon=True)
-        self._thread.start()
+    def init_plugin(self, config: dict | None = None):
+        """
+        先完成旧历史记录的最终保存，再应用新配置并创建新的历史记录缓冲区。
 
-    def load_config(self, config: dict):
-        """加载配置"""
-        if config:
-            self.config = CureTMDbAnimeConfig(**config)
+        :raises ServiceError: 旧历史记录保存失败；保留旧记录，等待后续关闭时重试。
+        """
+        validated = CureTMDbAnimeConfig.model_validate(config or {})
+        with self.runtime.command_lock, self._history_close_lock:
+            self.close()
+            self.runtime.stop()
+
+            history = HistoryStore(self, validated.history_max_records)
+            history.prune()
+
+            self.config = validated
+            self.runtime.config = validated.model_copy(deep=True)
+
+            with self._patch_lock:
+                self.history = history
+                self._history_generation += 1
+                self._history_closed = False
+                self._history_drained = False
+
+                generation = self._history_generation
+                history.set_request_flush(
+                    lambda: self._request_history_flush(generation)
+                )
+                self._scheduler_checked_at = time.monotonic()
+
+                # 稍后会注册定期保存任务，注册前先视为不可用。
+                history.set_scheduler_available(False)
+
+            logger.debug("历史记录定期保存等待调度器注册")
+            self.monitor.prepare()
+            self.correction.configure(validated)
+
+            if validated.enabled:
+                self.runtime.start(validated, self._management_token())
+
+    def _management_token(self):
+        if self.config.service_mode == "external":
+            return self.config.management_token
+        token = self.get_data(key="local_management_token")
+        if not token:
+            token = secrets.token_urlsafe(32)
+            self.save_data(key="local_management_token", value=token)
+        return token
+
+    def query_data(self, *, key_prefix: str, query: str = "") -> list[dict[str, Any]]:
+        """
+        在插件内按字面前缀和固定历史搜索字段查询当前实例数据。
+
+        不依赖基类或 PluginDataOper 新增 query_data 方法；复用已有查询
+        执行入口，不导入宿主模型、不新建会话或提交调用方事务。
+
+        :param key_prefix: 区分大小写的完整字面键前缀
+        :param query: 完整字面关键词，百分号和下划线不是通配符
+        :return: 普通 key/value 候选数据，资源精筛由 HistoryStore 完成
+        """
+        return query_plugin_data(
+            self.plugindata._execute_sync_query,
+            self.__class__.__name__,
+            key_prefix,
+            query,
+        )
 
     def stop_service(self):
-        """退出插件"""
-        if self._thread:
-            # 设置停止事件
-            self._event.set()
-            # 等待线程结束
-            self._thread.join(timeout=5)
-            if self._thread.is_alive():
-                logger.warning("CureTMDbAnime 服务线程未能及时停止。")
-            # 重置停止事件
-            self._event.clear()
-            self._thread = None
+        """
+        停止接收新记录、等待已开始的保存并完成最后保存，然后停止外部服务。
 
-        # 线程停止后再恢复补丁
-        self.patch_manager.unpatch_all()
+        保存失败时保留原历史记录对象，后续可以重试。
+        """
+        with self.runtime.command_lock:
+            try:
+                self.close()
+            finally:
+                self.runtime.stop()
 
-    def get_api(self) -> list[dict]:
-        pass
+    def close(self):
+        """
+        停止接收新记录并解除生产钩子，等待正在保存但尚未确认的数据，再完成最后保存。
+
+        保存失败时仍保持关闭状态；重复调用会对原历史记录对象重试，不会替换其中的数据。
+
+        :raises ServiceError: 最后保存失败；原历史记录对象仍保留，不能视为已完成收尾
+        """
+        with self._history_close_lock:
+            with self._patch_lock:
+                history = self.history
+                if not self._history_closed:
+                    self._history_closed = True
+                    self._history_generation += 1
+                    if history is not None:
+                        history.stop_admission()
+                        history.set_scheduler_available(False)
+                self._disconnected()
+            if history is not None and not self._history_drained:
+                try:
+                    closed = history.close()
+                except Exception as error:
+                    raise ServiceError(
+                        "历史记录最终保存失败，保留记录等待重试"
+                    ) from error
+                if not closed:
+                    raise ServiceError("历史记录最终保存失败，保留记录等待重试")
+                self._history_drained = True
+
+    def _connected(self, address, event):
+        """
+        仅在当前历史记录对象仍接收新记录时安装生产钩子。
+        """
+        with self._patch_lock:
+            if event.is_set() or not self.config.enabled or self._history_closed:
+                return
+            if self._active_address == address:
+                return
+            self.patch_manager.patch_build_url(address)
+            if self.config.enable_correction:
+                generation, history = self._history_generation, self.history
+
+                def correct(meta, mediainfo, **kwargs):
+                    """
+                    旧回调不能向插件重载后创建的新历史记录对象写入数据。
+                    """
+                    if self._history_closed or generation != self._history_generation:
+                        return meta
+                    self._refresh_history_scheduler()
+                    return self.correction.correct_meta(
+                        meta, mediainfo, history=history, **kwargs
+                    )
+
+                self.patch_manager.patch_meta_enhancement(correct)
+            self._active_address = address
+
+    def _disconnected(self):
+        """
+        幂等解除生产钩子，不丢弃历史记录对象中尚未保存的记录。
+        """
+        with self._patch_lock:
+            if self._active_address or self.patch_manager.is_patched():
+                self.patch_manager.unpatch_all()
+            self._active_address = None
+
+    @staticmethod
+    def get_render_mode():
+        return "vue", "dist/assets"
 
     def get_form(self):
-        return [
-            {
-                "component": "VForm",
-                "content": [
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enabled",
-                                            "label": "启用插件",
-                                            "hint": "开启后将使用 CureTMDbAnime 代理 TheMovieDb API请求",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "port",
-                                            "label": "端口",
-                                            "type": "number",
-                                            "min": 1024,
-                                            "max": 65535,
-                                            "step": 1,
-                                            "hint": "插件服务的监听端口，范围 1024-65535",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "enable_correction",
-                                            "label": "启用元数据修正",
-                                            "hint": "开启后将对元数据季号、集号进行修正",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "bangumi_api_url",
-                                            "label": "Bangumi API URL",
-                                            "placeholder": "https://api.bgm.tv",
-                                            "hint": "请求 Bangumi API 时使用的地址",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "tvdb_api_url",
-                                            "label": "TVDB API URL",
-                                            "placeholder": "https://api4.thetvdb.com/v4",
-                                            "hint": "请求 TVDB API 时使用的地址",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "bangumi_use_proxy",
-                                            "label": "Bangumi 使用代理",
-                                            "hint": "请求 Bangumi API 时是否使用代理",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VSwitch",
-                                        "props": {
-                                            "model": "assume_season_by_window",
-                                            "label": "按播出窗口推断季号",
-                                            "hint": "在标题缺少明确季号时，根据发布时间匹配 TMDB 季播出窗口尝试修正季号",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "grace_episodes",
-                                            "label": "集数越界宽限",
-                                            "type": "number",
-                                            "min": 0,
-                                            "max": 5,
-                                            "step": 1,
-                                            "hint": "最新季连载中允许超出 TMDB 已知集数的宽限集数，用于容忍连载滞后",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 4},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "production_cycle_gap_days",
-                                            "label": "制作周期间隔阈值（天）",
-                                            "type": "number",
-                                            "min": 1,
-                                            "max": 365,
-                                            "step": 1,
-                                            "hint": "制作周期策略中，相邻集播出间隔超过该天数时视为新的制作周期；默认 90 天",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
-                            {
-                                "component": "VCol",
-                                "props": {"cols": 12, "md": 9},
-                                "content": [
-                                    {
-                                        "component": "VTextField",
-                                        "props": {
-                                            "model": "source",
-                                            "label": "来源",
-                                            "hint": "自定义分季数据源地址（JSON格式），适用于无法自动匹配或需自定义分季的场景",
-                                            "persistent-hint": True,
-                                        },
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                ],
-            }
-        ], CureTMDbAnimeConfig().model_dump()
+        return [], CureTMDbAnimeConfig().model_dump()
 
     def get_page(self):
         pass
 
     def get_state(self):
-        return self.patch_manager.is_patched()
+        return self.config.enabled
 
-    def _run_binary_in_thread(self):
+    def get_service(self):
         """
-        在独立线程中运行二进制文件并捕获其输出。
+        声明服务；业务参数和调度参数分别传递。
         """
-        # 工作目录
-        working_dir = settings.PLUGIN_DATA_PATH / self.__class__.__name__.lower()
-        # 可执行文件路径
-        executable_path = working_dir / self.binary_name
-
-        if not executable_path.exists() or not self._check_version(executable_path):
-            logger.info("尝试下载二级制文件...")
-            self.__download(executable_path)
-            if not executable_path.exists():
-                logger.error("二级制文件不存在，无法启动 CureTMDbAnime 服务。")
-                return
-
-        # 确保文件有可执行权限
-        if not os.access(executable_path, os.X_OK) and not self.__fix_exec_permission(
-            executable_path
-        ):
-            return
-
-        # 构建命令行参数列表
-        cmd_args = [
-            executable_path.as_posix(),
-            "--debug",
-            "--port",
-            str(self.config.port),
-            "--data-dir",
-            working_dir.as_posix(),
+        return [
+            {
+                "id": "CTMDbAHistoryFlush",
+                "name": "历史记录定期保存",
+                "trigger": "interval",
+                "func": self.flush_history,
+                "func_kwargs": {"generation": self._history_generation},
+                "kwargs": {
+                    "seconds": HistoryStore.flush_interval_seconds,
+                    "max_instances": 1,
+                    "coalesce": True,
+                },
+            },
+            {
+                "id": "CTMDbAHistoryCleanup",
+                "name": "历史记录清理",
+                "trigger": "interval",
+                "func": self.cleanup_expired_history,
+                "func_kwargs": {"generation": self._history_generation},
+                "kwargs": {"hours": 6},
+            },
+            {
+                "id": "CTMDbAUpstreamMonitor",
+                "name": "连通性检测",
+                "trigger": "interval",
+                "func": self.collect_upstream_history,
+                "kwargs": {"minutes": 30},
+            },
         ]
 
-        if self.config.bangumi_api_url:
-            cmd_args.extend(["--bangumi-api-url", self.config.bangumi_api_url])
+    def collect_upstream_history(self):
+        """
+        仅此入口追加自动样本，页面和手动测试不调用。
+        """
+        self.monitor.collect()
 
-        if self.config.tvdb_api_url:
-            cmd_args.extend(["--tvdb-api-url", self.config.tvdb_api_url])
+    def _refresh_history_scheduler(self):
+        """
+        检查定期保存任务是否已注册；每五秒最多检查一次，不自行创建后台循环。
 
-        if self.config.bangumi_use_proxy:
-            cmd_args.append("--bangumi-use-proxy")
-
-        if self.config.source:
-            cmd_args.extend(["--cure-source", self.config.source])
-
-        if settings.PROXY_HOST:
-            cmd_args.extend(["--proxy", settings.PROXY_HOST])
-
-        if settings.TMDB_API_DOMAIN:
-            cmd_args.extend(["--tmdb-api-url", f"https://{settings.TMDB_API_DOMAIN}"])
-
-        process = None
+        检查失败也不能影响识别。
+        """
+        with self._patch_lock:
+            history = self.history
+            generation = self._history_generation
+            now = time.monotonic()
+            if (
+                history is None
+                or self._history_closed
+                or now - self._scheduler_checked_at < 5
+            ):
+                return
+            self._scheduler_checked_at = now
         try:
-            from subprocess import PIPE
-
-            import psutil
-
-            process = psutil.Popen(
-                cmd_args, stdout=PIPE, stderr=PIPE, text=True, bufsize=1
+            job_id = f"{self.__class__.__name__}_CTMDbAHistoryFlush"
+            available = any(
+                getattr(job, "id", None) == job_id for job in list_scheduler_jobs()
             )
-            if process.is_running():
-                self.patch_manager.patch_build_url(self.config.port)
-                if self.config.enable_correction:
-                    self.patch_manager.patch_meta_enhancement(self.correct_meta)
-                # 输出服务日志
-                self._read_process_output(process)
-
-        finally:
-            if process and process.is_running():
-                logger.warning("CureTMDbAnime 服务终止，尝试清理进程。")
-                process.kill()
-            if process:
-                process.wait()
-            logger.info("CureTMDbAnime 服务线程已退出。")
-
-    def _read_process_output(self, process):
-        import selectors
-
-        def log_output_line(line: str):
-            if line.strip():
-                parts = line.strip().split(" ", 3)
-                log_level = parts[0][1:-1].lower()
-                log_func = (
-                    logger.debug
-                    if log_level == "gin"
-                    else getattr(logger, log_level, logger.critical)
+        except Exception:  # noqa: BLE001 -- 检查保存任务失败也不能影响识别
+            available = False
+        with self._patch_lock:
+            if (
+                self._history_closed
+                or generation != self._history_generation
+                or history is not self.history
+            ):
+                return
+            history.set_scheduler_available(available)
+            if not available:
+                logger.warning(
+                    "历史记录的定时保存暂不可用，记录先留在内存中；插件停止时仍会尝试保存。"
                 )
-                log_func(f"🔗  {parts[-1].strip()}")
 
-        with selectors.DefaultSelector() as sel:
-            sel.register(process.stdout, selectors.EVENT_READ, data="stdout")
-            sel.register(process.stderr, selectors.EVENT_READ, data="stderr")
-
-            while not self._event.is_set():
-                events = sel.select(timeout=1)
-                for key, _ in events:
-                    line = key.fileobj.readline()
-                    if line:
-                        log_output_line(line)
-
-    def _check_version(self, executable: Path) -> bool:
-        """检查版本"""
-        from app.sdk.string import StringUtils
-
-        version = SystemUtils.execute(f"{executable.as_posix()} -v")
-        if version == "dev":
-            return True
-
-        result, msg = StringUtils.compare_version(
-            version, ">=", self.binary_version, True
-        )
-        if result is None:
-            logger.error(f"比较版本出错：{msg}")
-            return False
-
-        logger.info(msg)
-        return result
-
-    @staticmethod
-    def __fix_exec_permission(file_path: Path) -> bool:
-        """修复文件可执行权限"""
-        try:
-            import stat
-
-            current_uid = os.getuid()
-            file_stat = file_path.stat()
-
-            # 文件所有者或 root 可直接修改
-            if current_uid == file_stat.st_uid or current_uid == 0:
-                file_path.chmod(file_stat.st_mode | stat.S_IXUSR)
-                success = os.access(file_path, os.X_OK)
-                if success:
-                    logger.info(
-                        f"权限修复成功：{oct(file_path.stat().st_mode & 0o777)}"
-                    )
-                else:
-                    logger.error("权限设置后仍无法执行")
-                return success
-
-            logger.error("当前用户无权限")
-            return False
-
-        except Exception as e:
-            logger.error(f"修复可执行权限失败：{e}")
-            return False
-
-    def __download_url(self):
+    def _request_history_flush(self, generation):
         """
-        获取下载链接
+        历史记录快到内存缓冲上限时，尽快安排一次保存，避免记录继续积压。
+
+        插件已关闭或请求来自旧的历史记录时，不再处理。
+        如果无法安排这次保存，不影响媒体识别；记录留待可用的保存任务处理，
+        插件停止时也会尝试做最后一次保存。
         """
-        _url = "{author_url}/{name}/releases/download/v{version}/{name}-{os}-{arch}"
-
-        if SystemUtils.is_aarch64():
-            arch = "arm64"
-        elif SystemUtils.is_x86_64():
-            arch = "amd64"
-        else:
-            raise NotImplementedError("不支持的CPU架构")
-
-        os_name = "darwin" if SystemUtils.is_macos() else "linux"
-
-        return _url.format(
-            author_url=self.author_url,
-            name=self.binary_name,
-            arch=arch,
-            version=self.binary_version,
-            os=os_name,
-        )
-
-    def __download(self, dest_path: Path):
-        """
-        下载二进制文件
-        """
-        import shutil
-        import tempfile
-
-        url = self.__download_url()
-        temp_dir = tempfile.mkdtemp()
-        temp_file = Path(temp_dir) / f"{self.binary_name}.tmp"
-
-        try:
-            # 创建目标目录
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-            logger.info(f"正在下载: {url}")
-            with RequestUtils(proxies=settings.PROXY).get_stream(url) as r:
-                r.raise_for_status()
-                with open(temp_file, "wb") as f:
-                    f.writelines(r.iter_content(chunk_size=8192))
-
-            # 设置可执行权限
-            temp_file.chmod(0o755)
-
-            # 复制到目标位置
-            shutil.copy2(temp_file.as_posix(), dest_path.as_posix())
-
-            logger.info(f"下载完成: {dest_path}")
-
-        except Exception as e:
-            logger.error(f"下载失败: {e}")
-            raise
-        finally:
-            # 清理临时目录
+        with self._patch_lock:
+            if self._history_closed or generation != self._history_generation:
+                return
+            self._refresh_history_scheduler()
+            if not self.history.status()["scheduler_available"]:
+                return
             try:
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                logger.warning(f"清理临时目录失败: {e}")
-
-    @cached(ttl=2 * 3600)
-    def _get_logical_mapping(self, tmdb_id: int):
-        """
-        获取 TMDB 逻辑季集映射信息
-        """
-        mapping: dict[tuple[int, int], tuple[int, int]] = {}
-
-        result = RequestUtils(timeout=2).get_json(
-            f"http://127.0.0.1:{self.config.port}/cache/mapping/{tmdb_id}"
-        )
-        if not isinstance(result, dict):
-            return mapping
-
-        for season_key, episodes in result.items():
-            try:
-                season_num = int(season_key)
-            except TypeError, ValueError:
-                continue
-
-            if not isinstance(episodes, dict):
-                continue
-
-            for episode_key, item in episodes.items():
-                try:
-                    episode_num = int(episode_key)
-                except TypeError, ValueError:
-                    continue
-
-                if not isinstance(item, dict):
-                    continue
-
-                logical_season = item.get("season")
-                logical_episode = item.get("episode")
-                try:
-                    logical_season = int(logical_season)
-                    logical_episode = int(logical_episode)
-                except TypeError, ValueError:
-                    continue
-
-                mapping[(season_num, episode_num)] = (logical_season, logical_episode)
-
-        return mapping
-
-    def correct_meta(
-        self,
-        meta: MetaBase,
-        mediainfo: MediaInfo,
-        downloadhistory: DownloadHistory | None = None,
-    ) -> MetaBase:
-        """
-        根据逻辑季信息调整元数据对象中的季号和集号。
-
-        :param meta: 原始元数据对象
-        :param mediainfo: 媒体信息对象
-        """
-        if not meta or not mediainfo or mediainfo.type.name != "TV":
-            return meta
-
-        if set(mediainfo.genre_ids).isdisjoint(settings.ANIME_GENREIDS):
-            return meta
-
-        # 检查识别词是否已偏移集数
-        if meta.apply_words and (
-            matched_word := next(
-                (
-                    word
-                    for word in meta.apply_words
-                    if " >> " in word and " <> " in word
-                ),
-                None,
-            )
-        ):
-            logger.info(f"存在应用的集数偏移识别词 `{matched_word}`, 跳过调整元数据")
-            return meta
-
-        if downloadhistory and downloadhistory.seasons and downloadhistory.episodes:
-            season_episode = meta.season_episode
-
-            meta.set_season(
-                [int(x) for x in re.findall(r"\d+", downloadhistory.seasons)]
-            )
-            meta.set_episode(
-                [int(x) for x in re.findall(r"\d+", downloadhistory.episodes)]
-            )
-
-            if season_episode != meta.season_episode:
-                logger.info(
-                    f"{meta.title}: 识别季集 {season_episode} → 使用下载历史记录值 {meta.season_episode}"
+                available = add_plugin_once_job(
+                    self.__class__.__name__,
+                    "CTMDbAHistoryPressure",
+                    self.flush_history,
+                    "历史记录阈值保存",
+                    func_kwargs={"generation": generation, "force": True},
                 )
-            return meta
+            except Exception:  # noqa: BLE001 -- 调度失败不能中断识别
+                available = False
 
-        # 补充seasons信息
-        if not mediainfo.seasons and (
-            info := self.chain.tmdb_info(mediainfo.tmdb_id, mtype=mediainfo.type)
-        ):
-            mediainfo = MediaInfo(tmdb_info=info)
+            if not available:
+                self.history.set_scheduler_available(False)
+                logger.warning(
+                    "历史记录接近缓冲区上限，无法安排立即保存；记录暂留内存，停止时仍会尝试保存。"
+                )
 
-        pubdate = self.patch_manager.get_torrent_pubdate(
-            title=downloadhistory.torrent_name if downloadhistory else meta.title,
-            description=downloadhistory.torrent_description
-            if downloadhistory
-            else meta.subtitle,
-        )
-        try:
-            decision = self.meta_correction_use_case.correct(
-                meta=meta,
-                tmdb_mapping=self._get_logical_mapping(mediainfo.tmdb_id),
-                mediainfo=mediainfo,
-                publish_date=pubdate,
-                source="torrent_pubdate" if pubdate else None,
-            )
-        except ValueError:
-            return meta
+    def flush_history(self, generation=None, force=False):
+        """
+        只保存当前历史记录对象的记录；旧任务或已关闭对象不得继续保存。
+        """
+        with self._patch_lock:
+            if self._history_closed or generation != self._history_generation:
+                return
+            history = self.history
+            history.set_scheduler_available(True)
+        history.flush(force=force)
 
-        if not decision.changed:
-            return meta
+    def cleanup_expired_history(self, generation=None):
+        """
+        只清理当前历史记录对象中的过期资源；旧任务或已关闭对象不得继续清理。
+        """
+        with self._patch_lock:
+            if self._history_closed or generation != self._history_generation:
+                return
+            history = self.history
+        history.prune()
 
-        meta.set_season(decision.final_range.season_list)
-        meta.set_episode(decision.final_range.episode_list)
-
-        logger.info(
-            f"{meta.title}, {'；'.join(decision.reasons) if decision.reasons else ''}"
-        )
-        return meta
+    def get_api(self):
+        return self.api.get_api()

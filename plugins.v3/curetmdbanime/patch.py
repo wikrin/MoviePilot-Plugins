@@ -1,6 +1,10 @@
+"""
+管理生产钩子和网络补丁，并转发可靠原种子上下文。
+"""
+
+import inspect
 import sys
 import types
-import inspect
 from urllib.parse import urlparse
 
 from requests.sessions import Session
@@ -190,9 +194,10 @@ class MonkeyPatchManager:
 
         self.patch(http_, "_get_shared_async_transport", new_get_transport)
 
-    def patch_build_url(self, port: int):
+    def patch_build_url(self, address: str | int):
 
-        tmdb_local_url = f"http://127.0.0.1:{port}"
+        # 兼容原端口参数，同时支持容器地址和反向代理路径前缀。
+        tmdb_local_url = f"http://127.0.0.1:{address}" if isinstance(address, int) else address.rstrip("/")
         self.add_no_proxy_url(tmdb_local_url)
 
         def new_build_url(instance: TMDb, action, params=""):
@@ -221,7 +226,9 @@ class MonkeyPatchManager:
         method_name = "__setattr__"
 
         def _make_key(title: str, desc: str | None) -> str:
-            """生成统一的缓存键"""
+            """
+            生成统一的缓存键。
+            """
             return StringUtils.md5_hash(f"{title}{desc}")
 
         def _update_cache(instance: TorrentInfo):
@@ -277,7 +284,7 @@ class MonkeyPatchManager:
 
             # app/chain/subscribe/match.py: _record_match_resource(_context, "rejected", "季、集范围不符合订阅")
             if decision == "rejected" and reason == "季、集范围不符合订阅":
-                func(context.meta_info, context.media_info)
+                func(context.meta_info, context.media_info, source="subscription")
 
             return original_record_match_resource(context, decision, reason)
 
@@ -292,7 +299,7 @@ class MonkeyPatchManager:
 
         def new_torrent_meta(torrent: TorrentInfo, custom_words: list[str], mediainfo):
             meta = original_torrent_meta(torrent=torrent, custom_words=custom_words, mediainfo=mediainfo)
-            return func(meta, mediainfo)
+            return func(meta, mediainfo, source="search")
 
         self.patch(result_, "_torrent_meta", new_torrent_meta)
 
@@ -321,12 +328,15 @@ class MonkeyPatchManager:
         return None
 
     def patch_transfer_planning(self, func):
+        """
+        整理入口传递下载历史快照的原种子上下文。
+        """
 
         original_build_planning_input = TransferPlanningOwner._TransferChain__build_planning_input
 
         def new_build_planning_input(instance, task, *args, **kwargs):
             # 防止内存共享, 赋值新对象
-            task.meta = func(task.meta, task.mediainfo, task.download_history)
+            task.meta = func(task.meta, task.mediainfo, downloadhistory=task.download_history, source="transfer")
             return original_build_planning_input(instance, task, *args, **kwargs)
 
         self.patch(
@@ -341,7 +351,7 @@ class MonkeyPatchManager:
 
         def new_build_media_info_base(instance, info, meta, tmdbid: int | None):
             mediainfo = original_build_media_info_base(instance, info, meta, tmdbid)
-            func(meta, mediainfo)
+            func(meta, mediainfo, source="recognition")
             return mediainfo
 
         self.patch(TheMovieDbModule, "_build_media_info_base", new_build_media_info_base)
