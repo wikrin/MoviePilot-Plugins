@@ -1,0 +1,27 @@
+{
+  "name": "moviepilot-plugin-curetmdbanime",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.js",
+    "test:federation": "node checks/federation-smoke.mjs"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "vuetify": "3.7.3"
+  },
+  "devDependencies": {
+    "@module-federation/vite": "1.23.10",
+    "@vitejs/plugin-vue": "^5.2.4",
+    "typescript": "^5.7.3",
+    "vite": "^5.4.21",
+    "vue-tsc": "^2.2.12",
+    "@vue/test-utils": "2.4.11",
+    "jsdom": "26.1.0",
+    "vitest": "3.2.7"
+  }
+}
